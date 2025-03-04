@@ -1,5 +1,4 @@
-# From https://ftp.postgresql.org/pub/source/v13.5/postgresql-13.5.tar.bz2.sha256
-sha256  9b81067a55edbaabc418aacef457dd8477642827499560b00615a6ea6c13f6b3  postgresql-13.5.tar.bz2
-
+# From https://ftp.postgresql.org/pub/source/v16.7/postgresql-16.7.tar.bz2.sha256
+sha256  62e02f77ebfc4a37f1700c20cc3ccd85ff797b5613766ebf949a7899bb2113fe  postgresql-16.7.tar.bz2
 # License file, Locally calculated
-sha256  31ccadc0a70e8e0e8a35c5833567b64388dfe34987d962e1911554e271294105  COPYRIGHT
+sha256  9bf20ee493926a7e17a74bc7f05089fbc014269667b1540bc35a6b194a40c9de  COPYRIGHT

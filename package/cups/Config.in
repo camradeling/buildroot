@@ -6,10 +6,11 @@ config BR2_PACKAGE_CUPS
 	depends on BR2_TOOLCHAIN_HAS_THREADS
 	# needs fork()
 	depends on BR2_USE_MMU
+	select BR2_PACKAGE_LIBXCRYPT if BR2_TOOLCHAIN_USES_GLIBC
 	help
 	  The Common Unix Printing System
 
-	  http://www.cups.org
+	  https://openprinting.github.io/cups
 
 comment "cups needs a toolchain w/ C++, threads"
 	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_TOOLCHAIN_HAS_THREADS

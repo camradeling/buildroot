@@ -4,14 +4,15 @@
 #
 ################################################################################
 
-RTMPDUMP_VERSION = c5f04a58fc2aeea6296ca7c44ee4734c18401aa3
-RTMPDUMP_SITE = git://git.ffmpeg.org/rtmpdump
+RTMPDUMP_VERSION = 6f6bb1353fc84f4cc37138baa99f586750028a01
+RTMPDUMP_SITE = https://git.ffmpeg.org/rtmpdump
+RTMPDUMP_SITE_METHOD = git
 RTMPDUMP_INSTALL_STAGING = YES
 # Note that rtmpdump is GPL-2.0 but librtmp has its own license and since we only
 # care about librtmp, it's LGPL-2.1+
 RTMPDUMP_LICENSE = LGPL-2.1+
 RTMPDUMP_LICENSE_FILES = librtmp/COPYING
-RTMPDUMP_CPE_ID_VENDOR = rtmpdump_project
+RTMPDUMP_CPE_ID_VALID = YES
 RTMPDUMP_DEPENDENCIES = zlib
 
 ifeq ($(BR2_PACKAGE_GNUTLS),y)

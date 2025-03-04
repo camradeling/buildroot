@@ -1,5 +1,5 @@
-# Hash from: https://download.qt.io/official_releases/qt/5.15/5.15.2/submodules/qtconnectivity-everywhere-src-5.15.2.tar.xz.sha256
-sha256  0380327871f76103e5b8c2a305988d76d352b6a982b3e7b3bc3cdc184c64bfa0  qtconnectivity-everywhere-src-5.15.2.tar.xz
+# Locally calculated
+sha256  3f7ed280d234a50d21937aecaf5494bbd570fb80e71f49598e082cefe81d41fe  qtconnectivity-99f30db37c63447c59d5fac15bc8feb832a7fd04.tar.bz2
 
 # Hashes for license files:
 sha256  8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  LICENSE.GPL2

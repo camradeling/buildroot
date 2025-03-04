@@ -4,16 +4,15 @@
 #
 ################################################################################
 
-ZFS_VERSION = 2.0.5
+ZFS_VERSION = 2.2.7
 ZFS_SITE = https://github.com/openzfs/zfs/releases/download/zfs-$(ZFS_VERSION)
+ZFS_SELINUX_MODULES = zfs
 ZFS_LICENSE = CDDL
 ZFS_LICENSE_FILES = LICENSE COPYRIGHT
 ZFS_CPE_ID_VENDOR = openzfs
 ZFS_CPE_ID_PRODUCT = openzfs
 
-ZFS_AUTORECONF = YES
-
-ZFS_DEPENDENCIES = libaio openssl udev util-linux zlib
+ZFS_DEPENDENCIES = libaio openssl udev util-linux zlib libcurl linux
 
 # sysvinit installs only a commented-out modules-load.d/ config file
 ZFS_CONF_OPTS = \
@@ -36,24 +35,14 @@ else
 ZFS_CONF_OPTS += --disable-systemd
 endif
 
-# The optional PyZFS uses different scripts depending on the python
-# version (ex: arc_summary2 or arc_summary3).
-ifeq ($(BR2_PACKAGE_PYTHON),y)
-ZFS_DEPENDENCIES += python python-setuptools host-python-cffi
+ifeq ($(BR2_PACKAGE_PYTHON3),y)
+ZFS_DEPENDENCIES += python3 python-setuptools host-python-cffi host-python-packaging
 ZFS_CONF_ENV += \
-	PYTHON=$(HOST_DIR)/usr/bin/python2 \
-	PYTHON_CPPFLAGS="`$(STAGING_DIR)/usr/bin/python2-config --includes`" \
-	PYTHON_LIBS="`$(STAGING_DIR)/usr/bin/python2-config --ldflags`" \
-	PYTHON_SITE_PKG="/usr/lib/python$(PYTHON_VERSION_MAJOR)/site-packages"
-ZFS_CONF_OPTS += --enable-pyzfs
-else ifeq ($(BR2_PACKAGE_PYTHON3),y)
-ZFS_DEPENDENCIES += python3 python-setuptools host-python-cffi
-ZFS_CONF_ENV += \
-	PYTHON=$(HOST_DIR)/usr/bin/python3 \
+	PYTHON=$(HOST_DIR)/bin/python3 \
 	PYTHON_CPPFLAGS="`$(STAGING_DIR)/usr/bin/python3-config --includes`" \
 	PYTHON_LIBS="`$(STAGING_DIR)/usr/bin/python3-config --ldflags`" \
 	PYTHON_EXTRA_LIBS="`$(STAGING_DIR)/usr/bin/python3-config --libs --embed`" \
-	PYTHON_SITE_PKG="/usr/lib/python$(PYTHON_VERSION_MAJOR)/site-packages"
+	PYTHON_SITE_PKG="/usr/lib/python$(PYTHON3_VERSION_MAJOR)/site-packages"
 ZFS_CONF_OPTS += --enable-pyzfs
 else
 ZFS_CONF_OPTS += --disable-pyzfs --without-python
@@ -61,10 +50,18 @@ endif
 
 ifeq ($(BR2_PACKAGE_LINUX_PAM),y)
 ZFS_DEPENDENCIES += linux-pam
-ZFS_CONF_ENV += --enable-pam=yes
+ZFS_CONF_OPTS += --enable-pam
 else
 ZFS_CONF_OPTS += --disable-pam
 endif
+
+# Sets the environment for the `make` that will be run ZFS autotools checks.
+ZFS_CONF_ENV += \
+	ARCH=$(KERNEL_ARCH) \
+	CROSS_COMPILE="$(TARGET_CROSS)"
+ZFS_MAKE_ENV += \
+	ARCH=$(KERNEL_ARCH) \
+	CROSS_COMPILE="$(TARGET_CROSS)"
 
 # ZFS userland tools are unfunctional without the Linux kernel modules.
 ZFS_MODULE_SUBDIRS = \
@@ -87,5 +84,7 @@ define ZFS_LINUX_CONFIG_FIXUPS
 	$(call KCONFIG_ENABLE_OPT,CONFIG_ZLIB_INFLATE)
 endef
 
-$(eval $(kernel-module))
+# Even though zfs builds a kernel module, it gets built directly by
+# the autotools logic, so we don't use the kernel-module
+# infrastructure.
 $(eval $(autotools-package))

@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-SAMBA4_VERSION = 4.14.10
+SAMBA4_VERSION = 4.20.6
 SAMBA4_SITE = https://download.samba.org/pub/samba/stable
 SAMBA4_SOURCE = samba-$(SAMBA4_VERSION).tar.gz
 SAMBA4_INSTALL_STAGING = YES
@@ -17,8 +17,10 @@ SAMBA4_DEPENDENCIES = \
 	host-e2fsprogs host-flex host-heimdal host-nfs-utils \
 	host-perl host-perl-parse-yapp host-python3 \
 	cmocka e2fsprogs gnutls popt zlib \
+	$(if $(BR2_PACKAGE_ICU),icu) \
 	$(if $(BR2_PACKAGE_LIBAIO),libaio) \
 	$(if $(BR2_PACKAGE_LIBCAP),libcap) \
+	$(if $(BR2_PACKAGE_LIBGLIB2),libglib2) \
 	$(if $(BR2_PACKAGE_READLINE),readline) \
 	$(TARGET_NLS_DEPENDENCIES)
 SAMBA4_CFLAGS = $(TARGET_CFLAGS)
@@ -35,6 +37,11 @@ SAMBA4_PYTHON += PYTHON_CONFIG="$(STAGING_DIR)/usr/bin/python3-config"
 SAMBA4_DEPENDENCIES += python3
 else
 SAMBA4_CONF_OPTS += --disable-python
+endif
+
+ifeq ($(BR2_PACKAGE_LIBICONV),y)
+SAMBA4_DEPENDENCIES += libiconv
+SAMBA4_LDFLAGS += -liconv
 endif
 
 ifeq ($(BR2_PACKAGE_LIBTIRPC),y)
@@ -72,18 +79,18 @@ else
 SAMBA4_CONF_OPTS += --disable-avahi
 endif
 
-ifeq ($(BR2_PACKAGE_GAMIN),y)
-SAMBA4_CONF_OPTS += --with-fam
-SAMBA4_DEPENDENCIES += gamin
-else
-SAMBA4_CONF_OPTS += --without-fam
-endif
-
 ifeq ($(BR2_PACKAGE_LIBARCHIVE),y)
 SAMBA4_CONF_OPTS += --with-libarchive
 SAMBA4_DEPENDENCIES += libarchive
 else
 SAMBA4_CONF_OPTS += --without-libarchive
+endif
+
+ifeq ($(BR2_PACKAGE_LIBUNWIND),y)
+SAMBA4_CONF_OPTS += --with-libunwind
+SAMBA4_DEPENDENCIES += libunwind
+else
+SAMBA4_CONF_OPTS += --without-libunwind
 endif
 
 ifeq ($(BR2_PACKAGE_NCURSES),y)
@@ -104,7 +111,7 @@ SAMBA4_POST_INSTALL_TARGET_HOOKS += SAMBA4_REMOVE_CTDB_TESTS
 
 define SAMBA4_CONFIGURE_CMDS
 	$(INSTALL) -m 0644 package/samba4/samba4-cache.txt $(@D)/cache.txt;
-	echo 'Checking whether fcntl supports setting/geting hints: $(if $(BR2_TOOLCHAIN_HEADERS_AT_LEAST_4_13),OK,NO)' >>$(@D)/cache.txt;
+	echo 'Checking whether fcntl supports setting/getting hints: $(if $(BR2_TOOLCHAIN_HEADERS_AT_LEAST_4_13),OK,NO)' >>$(@D)/cache.txt;
 	echo 'Checking uname machine type: $(BR2_ARCH)' >>$(@D)/cache.txt;
 	(cd $(@D); \
 		$(SAMBA4_PYTHON) \
@@ -113,7 +120,7 @@ define SAMBA4_CONFIGURE_CMDS
 		PERL="$(HOST_DIR)/bin/perl" \
 		$(TARGET_CONFIGURE_OPTS) \
 		$(SAMBA4_CONF_ENV) \
-		./buildtools/bin/waf configure \
+		./configure \
 			--prefix=/usr \
 			--sysconfdir=/etc \
 			--localstatedir=/var \
@@ -125,6 +132,7 @@ define SAMBA4_CONFIGURE_CMDS
 			--disable-rpath \
 			--disable-rpath-install \
 			--disable-iprint \
+			--without-fam \
 			--without-pam \
 			--without-dmapi \
 			--without-gpgme \

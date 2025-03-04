@@ -4,10 +4,11 @@
 #
 ################################################################################
 
-DARKHTTPD_VERSION = 1.13
+DARKHTTPD_VERSION = 1.15
 DARKHTTPD_SITE = $(call github,emikulic,darkhttpd,v$(DARKHTTPD_VERSION))
-DARKHTTPD_LICENSE = MIT
-DARKHTTPD_LICENSE_FILES = darkhttpd.c
+DARKHTTPD_LICENSE = ISC
+DARKHTTPD_LICENSE_FILES = COPYING
+DARKHTTPD_CPE_ID_VALID = YES
 
 define DARKHTTPD_BUILD_CMDS
 	$(TARGET_CONFIGURE_OPTS) $(MAKE) -C $(@D)

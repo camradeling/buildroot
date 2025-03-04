@@ -20,7 +20,7 @@ UBOOT_INSTALL_IMAGES = YES
 UBOOT_DEPENDENCIES = host-pkgconf $(BR2_MAKE_HOST_DEPENDENCY)
 UBOOT_MAKE = $(BR2_MAKE)
 
-ifeq ($(UBOOT_VERSION),custom)
+ifeq ($(BR2_TARGET_UBOOT_CUSTOM_TARBALL),y)
 # Handle custom U-Boot tarballs as specified by the configuration
 UBOOT_TARBALL = $(call qstrip,$(BR2_TARGET_UBOOT_CUSTOM_TARBALL_LOCATION))
 UBOOT_SITE = $(patsubst %/,%,$(dir $(UBOOT_TARBALL)))
@@ -54,10 +54,14 @@ endif
 
 ifeq ($(BR2_TARGET_UBOOT_FORMAT_ELF),y)
 UBOOT_BINS += u-boot
-# To make elf usable for debuging on ARC use special target
+# To make elf usable for debugging on ARC use special target
 ifeq ($(BR2_arc),y)
 UBOOT_MAKE_TARGET += mdbtrick
 endif
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_FORMAT_REMAKE_ELF),y)
+UBOOT_BINS += u-boot.elf
 endif
 
 # Call 'make all' unconditionally
@@ -129,7 +133,17 @@ endif
 
 ifeq ($(BR2_TARGET_UBOOT_FORMAT_STM32),y)
 UBOOT_BINS += u-boot.stm32
+ifeq ($(BR2_TARGET_UBOOT_BUILD_FORMAT_STM32_LEGACY),y)
 UBOOT_MAKE_TARGET += u-boot.stm32
+endif
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_INITIAL_ENV),y)
+UBOOT_MAKE_TARGET += u-boot-initial-env
+define UBOOT_INSTALL_UBOOT_INITIAL_ENV
+	$(INSTALL) -D -m 0644 $(@D)/u-boot-initial-env $(TARGET_DIR)/etc/u-boot-initial-env
+endef
+UBOOT_POST_INSTALL_TARGET_HOOKS += UBOOT_INSTALL_UBOOT_INITIAL_ENV
 endif
 
 ifeq ($(BR2_TARGET_UBOOT_FORMAT_CUSTOM),y)
@@ -143,12 +157,12 @@ endif
 
 # The kernel calls AArch64 'arm64', but U-Boot calls it just 'arm', so
 # we have to special case it. Similar for i386/x86_64 -> x86
-ifeq ($(KERNEL_ARCH),arm64)
+ifeq ($(NORMALIZED_ARCH),arm64)
 UBOOT_ARCH = arm
-else ifneq ($(filter $(KERNEL_ARCH),i386 x86_64),)
+else ifneq ($(filter $(NORMALIZED_ARCH),i386 x86_64),)
 UBOOT_ARCH = x86
 else
-UBOOT_ARCH = $(KERNEL_ARCH)
+UBOOT_ARCH = $(NORMALIZED_ARCH)
 endif
 
 UBOOT_MAKE_OPTS += \
@@ -157,6 +171,11 @@ UBOOT_MAKE_OPTS += \
 	HOSTCC="$(HOSTCC) $(subst -I/,-isystem /,$(subst -I /,-isystem /,$(HOST_CFLAGS)))" \
 	HOSTLDFLAGS="$(HOST_LDFLAGS)" \
 	$(call qstrip,$(BR2_TARGET_UBOOT_CUSTOM_MAKEOPTS))
+
+# Disable FDPIC if enabled by default in toolchain
+ifeq ($(BR2_BINFMT_FDPIC),y)
+UBOOT_MAKE_OPTS += KCFLAGS=-mno-fdpic
+endif
 
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_ATF_BL31),y)
 UBOOT_DEPENDENCIES += arm-trusted-firmware
@@ -175,6 +194,19 @@ UBOOT_PRE_BUILD_HOOKS += UBOOT_COPY_ATF_FIRMWARE
 endif
 endif
 
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_OPTEE_TEE),y)
+UBOOT_DEPENDENCIES += optee-os
+UBOOT_MAKE_OPTS += TEE=$(BINARIES_DIR)/tee.elf
+endif
+
+# TI K3 devices needs at least ti-sysfw (System Firmware) provided
+# by ti-k3-boot-firmware when built with u-boot's binman tool.
+# Some TI K3 devices using a split firmware boot flow (AM62,
+# j721e) also need the Device Manager (DM) firmware.
+ifeq ($(BR2_TARGET_TI_K3_BOOT_FIRMWARE),y)
+UBOOT_DEPENDENCIES += ti-k3-boot-firmware
+endif
+
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_OPENSBI),y)
 UBOOT_DEPENDENCIES += opensbi
 UBOOT_MAKE_OPTS += OPENSBI=$(BINARIES_DIR)/fw_dynamic.bin
@@ -187,7 +219,8 @@ UBOOT_DEPENDENCIES += firmware-imx
 UBOOT_IMX_FW_FILES = \
 	$(if $(BR2_PACKAGE_FIRMWARE_IMX_NEEDS_HDMI_FW),signed_hdmi_imx8m.bin) \
 	$(if $(BR2_PACKAGE_FIRMWARE_IMX_LPDDR4),lpddr4*.bin) \
-	$(if $(BR2_PACKAGE_FIRMWARE_IMX_DDR4),ddr4*.bin)
+	$(if $(BR2_PACKAGE_FIRMWARE_IMX_DDR4),ddr4*.bin) \
+	$(if $(BR2_PACKAGE_FIRMWARE_IMX_DDR3),ddr3*.bin)
 
 define UBOOT_COPY_IMX_FW_FILES
 	$(foreach fw,$(UBOOT_IMX_FW_FILES),\
@@ -197,26 +230,38 @@ endef
 UBOOT_PRE_BUILD_HOOKS += UBOOT_COPY_IMX_FW_FILES
 endif
 
-ifeq ($(BR2_TARGET_UBOOT_NEEDS_DTC),y)
-UBOOT_DEPENDENCIES += host-dtc
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_ROCKCHIP_RKBIN),y)
+UBOOT_DEPENDENCIES += rockchip-rkbin
+define UBOOT_INSTALL_UBOOT_ROCKCHIP_BIN
+	$(INSTALL) -D -m 0644 $(@D)/u-boot-rockchip.bin $(BINARIES_DIR)/u-boot-rockchip.bin
+endef
+UBOOT_POST_INSTALL_IMAGES_HOOKS += UBOOT_INSTALL_UBOOT_ROCKCHIP_BIN
+ifneq ($(ROCKCHIP_RKBIN_BL31_FILENAME),)
+UBOOT_MAKE_OPTS += BL31=$(BINARIES_DIR)/$(notdir $(ROCKCHIP_RKBIN_BL31_FILENAME))
+endif
+ifneq ($(ROCKCHIP_RKBIN_TPL_FILENAME),)
+UBOOT_MAKE_OPTS += ROCKCHIP_TPL=$(BINARIES_DIR)/$(notdir $(ROCKCHIP_RKBIN_TPL_FILENAME))
+endif
+ifneq ($(ROCKCHIP_RKBIN_TEE_FILENAME),)
+UBOOT_MAKE_OPTS += TEE=$(BINARIES_DIR)/$(notdir $(ROCKCHIP_RKBIN_TEE_FILENAME))
+endif
 endif
 
-ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYTHON2),y)
-UBOOT_DEPENDENCIES += host-python host-python-setuptools
-else ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYTHON3),y)
-UBOOT_DEPENDENCIES += host-python3 host-python3-setuptools
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_DTC),y)
+UBOOT_DEPENDENCIES += host-dtc
+UBOOT_MAKE_OPTS += DTC=$(HOST_DIR)/bin/dtc
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYTHON3),y)
+UBOOT_DEPENDENCIES += host-python3 host-python-setuptools
 endif
 
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYLIBFDT),y)
-UBOOT_DEPENDENCIES += host-swig
+UBOOT_DEPENDENCIES += host-python-pylibfdt
 endif
 
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYELFTOOLS),y)
-ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYTHON2),y)
 UBOOT_DEPENDENCIES += host-python-pyelftools
-else ifeq ($(BR2_TARGET_UBOOT_NEEDS_PYTHON3),y)
-UBOOT_DEPENDENCIES += host-python3-pyelftools
-endif
 endif
 
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_OPENSSL),y)
@@ -225,6 +270,28 @@ endif
 
 ifeq ($(BR2_TARGET_UBOOT_NEEDS_LZOP),y)
 UBOOT_DEPENDENCIES += host-lzop
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_GNUTLS),y)
+UBOOT_DEPENDENCIES += host-gnutls
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_UTIL_LINUX),y)
+UBOOT_DEPENDENCIES += host-util-linux
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_NEEDS_XXD),y)
+UBOOT_DEPENDENCIES += host-vim
+endif
+
+ifeq ($(BR2_TARGET_UBOOT_USE_BINMAN),y)
+# https://source.denx.de/u-boot/u-boot/-/blob/v2024.04/tools/binman/binman.rst?plain=1#L377
+# https://source.denx.de/u-boot/u-boot/-/blob/v2024.04/tools/buildman/requirements.txt
+UBOOT_DEPENDENCIES += \
+	host-python-jsonschema \
+	host-python-pyyaml \
+	host-python-yamllint
+UBOOT_MAKE_OPTS += BINMAN_INDIRS=$(BINARIES_DIR)
 endif
 
 # prior to u-boot 2013.10 the license info was in COPYING. Copy it so
@@ -237,6 +304,13 @@ endef
 
 UBOOT_POST_EXTRACT_HOOKS += UBOOT_COPY_OLD_LICENSE_FILE
 UBOOT_POST_RSYNC_HOOKS += UBOOT_COPY_OLD_LICENSE_FILE
+
+# Older versions break on gcc 10+ because of redefined symbols
+define UBOOT_DROP_YYLLOC
+	$(Q)grep -Z -l -r -E '^YYLTYPE yylloc;$$' $(@D) \
+	|xargs -0 -r $(SED) '/^YYLTYPE yylloc;$$/d'
+endef
+UBOOT_POST_PATCH_HOOKS += UBOOT_DROP_YYLLOC
 
 ifneq ($(ARCH_XTENSA_OVERLAY_FILE),)
 define UBOOT_XTENSA_OVERLAY_EXTRACT
@@ -321,6 +395,14 @@ UBOOT_KCONFIG_EDITORS = menuconfig xconfig gconfig nconfig
 # override again. In addition, host-ccache is not ready at kconfig
 # time, so use HOSTCC_NOCCACHE.
 UBOOT_KCONFIG_OPTS = $(UBOOT_MAKE_OPTS) HOSTCC="$(HOSTCC_NOCCACHE)" HOSTLDFLAGS=""
+
+ifeq ($(BR2_TARGET_UBOOT_DEFAULT_ENV_FILE_ENABLED),y)
+UBOOT_DEFAULT_ENV_FILE = $(call qstrip,$(BR2_TARGET_UBOOT_DEFAULT_ENV_FILE))
+define UBOOT_KCONFIG_DEFAULT_ENV_FILE
+	$(call KCONFIG_SET_OPT,CONFIG_USE_DEFAULT_ENV_FILE,y)
+	$(call KCONFIG_SET_OPT,CONFIG_DEFAULT_ENV_FILE,"$(shell readlink -f $(UBOOT_DEFAULT_ENV_FILE))")
+endef
+endif
 endif # BR2_TARGET_UBOOT_BUILD_SYSTEM_LEGACY
 
 UBOOT_CUSTOM_DTS_PATH = $(call qstrip,$(BR2_TARGET_UBOOT_CUSTOM_DTS_PATH))
@@ -367,6 +449,10 @@ endef
 
 ifeq ($(BR2_TARGET_UBOOT_ZYNQMP),y)
 
+ifeq ($(BR2_TARGET_UBOOT_ZYNQMP_PMUFW_PREBUILT),y)
+UBOOT_DEPENDENCIES += xilinx-prebuilt
+UBOOT_ZYNQMP_PMUFW_PATH = $(BINARIES_DIR)/pmufw.elf
+else
 UBOOT_ZYNQMP_PMUFW = $(call qstrip,$(BR2_TARGET_UBOOT_ZYNQMP_PMUFW))
 
 ifneq ($(findstring ://,$(UBOOT_ZYNQMP_PMUFW)),)
@@ -375,10 +461,23 @@ BR_NO_CHECK_HASH_FOR += $(notdir $(UBOOT_ZYNQMP_PMUFW))
 UBOOT_ZYNQMP_PMUFW_PATH = $(UBOOT_DL_DIR)/$(notdir $(UBOOT_ZYNQMP_PMUFW))
 else ifneq ($(UBOOT_ZYNQMP_PMUFW),)
 UBOOT_ZYNQMP_PMUFW_PATH = $(shell readlink -f $(UBOOT_ZYNQMP_PMUFW))
-endif
+endif #ifneq ($(findstring ://,$(UBOOT_ZYNQMP_PMUFW)),)
 
+endif #BR2_TARGET_UBOOT_ZYNQMP_PMUFW_PREBUILT
+
+ifeq ($(suffix $(UBOOT_ZYNQMP_PMUFW_PATH)),.elf)
+UBOOT_ZYNQMP_PMUFW_PATH_FINAL = $(basename $(UBOOT_ZYNQMP_PMUFW_PATH)).bin
+# objcopy is arch-agnostic so we can use $(TARGET_OBJCOPY) in lack of a
+# microblaze objcopy
+define UBOOT_ZYNQMP_PMUFW_CONVERT
+	$(TARGET_OBJCOPY) -O binary -I elf32-little $(UBOOT_ZYNQMP_PMUFW_PATH) $(UBOOT_ZYNQMP_PMUFW_PATH_FINAL)
+endef
+UBOOT_PRE_BUILD_HOOKS += UBOOT_ZYNQMP_PMUFW_CONVERT
+else
+UBOOT_ZYNQMP_PMUFW_PATH_FINAL = $(UBOOT_ZYNQMP_PMUFW_PATH)
+endif
 define UBOOT_ZYNQMP_KCONFIG_PMUFW
-	$(call KCONFIG_SET_OPT,CONFIG_PMUFW_INIT_FILE,"$(UBOOT_ZYNQMP_PMUFW_PATH)")
+	$(call KCONFIG_SET_OPT,CONFIG_PMUFW_INIT_FILE,"$(UBOOT_ZYNQMP_PMUFW_PATH_FINAL)")
 endef
 
 UBOOT_ZYNQMP_PM_CFG = $(call qstrip,$(BR2_TARGET_UBOOT_ZYNQMP_PM_CFG))
@@ -426,17 +525,6 @@ UBOOT_POST_BUILD_HOOKS += UBOOT_BUILD_OMAP_IFT
 UBOOT_POST_INSTALL_IMAGES_HOOKS += UBOOT_INSTALL_OMAP_IFT_IMAGE
 endif
 
-ifeq ($(BR2_TARGET_UBOOT_ZYNQ_IMAGE),y)
-define UBOOT_GENERATE_ZYNQ_IMAGE
-	$(HOST_DIR)/bin/python2 \
-		$(HOST_DIR)/bin/zynq-boot-bin.py \
-		-u $(@D)/$(firstword $(call qstrip,$(BR2_TARGET_UBOOT_SPL_NAME))) \
-		-o $(BINARIES_DIR)/BOOT.BIN
-endef
-UBOOT_DEPENDENCIES += host-zynq-boot-bin
-UBOOT_POST_INSTALL_IMAGES_HOOKS += UBOOT_GENERATE_ZYNQ_IMAGE
-endif
-
 ifeq ($(BR2_TARGET_UBOOT_ALTERA_SOCFPGA_IMAGE_CRC),y)
 ifeq ($(BR2_TARGET_UBOOT_SPL),y)
 UBOOT_CRC_ALTERA_SOCFPGA_INPUT_IMAGES = $(call qstrip,$(BR2_TARGET_UBOOT_SPL_NAME))
@@ -461,6 +549,7 @@ define UBOOT_KCONFIG_FIXUP_CMDS
 	$(UBOOT_ZYNQMP_KCONFIG_PMUFW)
 	$(UBOOT_ZYNQMP_KCONFIG_PM_CFG)
 	$(UBOOT_ZYNQMP_KCONFIG_PSU_INIT)
+	$(UBOOT_KCONFIG_DEFAULT_ENV_FILE)
 endef
 
 ifeq ($(BR2_TARGET_UBOOT)$(BR_BUILDING),yy)

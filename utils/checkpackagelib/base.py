@@ -1,5 +1,6 @@
 # See utils/checkpackagelib/readme.txt before editing this file.
 import re
+import os
 
 
 class _CheckFunction(object):
@@ -16,3 +17,22 @@ class _CheckFunction(object):
 
     def after(self):
         pass
+
+
+class _Tool(object):
+    def __init__(self, filename):
+        self.filename = filename
+
+    def run(self):
+        pass
+
+    def hint(self):
+        return ""
+
+
+def run_test_suite():
+    import pytest
+    return pytest.main(
+        # Disable writing/loading a cache with: -p no:cacheprovider
+        ["-v", "-p", "no:cacheprovider", os.path.dirname(__file__)]
+    )

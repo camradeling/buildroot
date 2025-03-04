@@ -7,7 +7,7 @@
 # Generate version string using:
 #   git describe --match 'glibc-*' --abbrev=40 origin/release/MAJOR.MINOR/master | cut -d '-' -f 2-
 # When updating the version, please also update localedef
-GLIBC_VERSION = 2.34-9-g9acab0bba6a5a57323b1f94bf95b21618a9e5aa4
+GLIBC_VERSION = 2.40-18-g5641780762723156b0d20a0b9f7df1d76831bab0
 # Upstream doesn't officially provide an https download link.
 # There is one (https://sourceware.org/git/glibc.git) but it's not reliable,
 # sometimes the connection times out. So use an unofficial github mirror.
@@ -19,6 +19,24 @@ GLIBC_SITE = $(call github,bminor,glibc,$(GLIBC_VERSION))
 GLIBC_LICENSE = GPL-2.0+ (programs), LGPL-2.1+, BSD-3-Clause, MIT (library)
 GLIBC_LICENSE_FILES = COPYING COPYING.LIB LICENSES
 GLIBC_CPE_ID_VENDOR = gnu
+
+# Extract the base version (e.g. 2.38) from GLIBC_VERSION in order to
+# allow proper matching with the CPE database.
+GLIBC_CPE_ID_VERSION = $(word 1, $(subst -,$(space),$(GLIBC_VERSION)))
+
+# All these CVEs are considered as not being security issues by
+# upstream glibc:
+#  https://security-tracker.debian.org/tracker/CVE-2010-4756
+#  https://security-tracker.debian.org/tracker/CVE-2019-1010022
+#  https://security-tracker.debian.org/tracker/CVE-2019-1010023
+#  https://security-tracker.debian.org/tracker/CVE-2019-1010024
+#  https://security-tracker.debian.org/tracker/CVE-2019-1010025
+GLIBC_IGNORE_CVES += \
+	CVE-2010-4756 \
+	CVE-2019-1010022 \
+	CVE-2019-1010023 \
+	CVE-2019-1010024 \
+	CVE-2019-1010025
 
 # glibc is part of the toolchain so disable the toolchain dependency
 GLIBC_ADD_TOOLCHAIN_DEPENDENCY = NO
@@ -51,6 +69,11 @@ endif
 
 ifeq ($(BR2_ENABLE_DEBUG),y)
 GLIBC_EXTRA_CFLAGS += -g
+endif
+
+# glibc explicitly requires compile barriers between files
+ifeq ($(BR2_TOOLCHAIN_GCC_AT_LEAST_4_7),y)
+GLIBC_EXTRA_CFLAGS += -fno-lto
 endif
 
 # The stubs.h header is not installed by install-headers, but is
@@ -93,6 +116,10 @@ endif
 GLIBC_MAKE = $(BR2_MAKE)
 GLIBC_CONF_ENV += ac_cv_prog_MAKE="$(BR2_MAKE)"
 
+ifeq ($(BR2_PACKAGE_GLIBC_KERNEL_COMPAT),)
+GLIBC_CONF_OPTS += --enable-kernel=$(call qstrip,$(BR2_TOOLCHAIN_HEADERS_AT_LEAST))
+endif
+
 # Even though we use the autotools-package infrastructure, we have to
 # override the default configure commands for several reasons:
 #
@@ -101,16 +128,31 @@ GLIBC_CONF_ENV += ac_cv_prog_MAKE="$(BR2_MAKE)"
 #
 #  2. We have to execute the configure script with bash and not sh.
 #
-# Note that as mentionned in
-# http://patches.openembedded.org/patch/38849/, glibc must be
-# built with -O2, so we pass our own CFLAGS and CXXFLAGS below.
+# Glibc nowadays can be build with optimization flags f.e. -Os
+
+GLIBC_CFLAGS = $(TARGET_OPTIMIZATION)
+# crash in qemu-system-nios2 with -Os
+ifeq ($(BR2_nios2),y)
+GLIBC_CFLAGS += -O2
+endif
+
+# glibc can't be built without optimization
+ifeq ($(BR2_OPTIMIZE_0),y)
+GLIBC_CFLAGS += -O1
+endif
+
+# glibc can't be built with Optimize for fast
+ifeq ($(BR2_OPTIMIZE_FAST),y)
+GLIBC_CFLAGS += -O2
+endif
+
 define GLIBC_CONFIGURE_CMDS
 	mkdir -p $(@D)/build
 	# Do the configuration
 	(cd $(@D)/build; \
 		$(TARGET_CONFIGURE_OPTS) \
-		CFLAGS="-O2 $(GLIBC_EXTRA_CFLAGS)" CPPFLAGS="" \
-		CXXFLAGS="-O2 $(GLIBC_EXTRA_CFLAGS)" \
+		CFLAGS="$(GLIBC_CFLAGS) $(GLIBC_EXTRA_CFLAGS)" CPPFLAGS="" \
+		CXXFLAGS="$(GLIBC_CFLAGS) $(GLIBC_EXTRA_CFLAGS)" \
 		$(GLIBC_CONF_ENV) \
 		$(SHELL) $(@D)/configure \
 		--target=$(GNU_TARGET_NAME) \
@@ -123,8 +165,9 @@ define GLIBC_CONFIGURE_CMDS
 		--disable-profile \
 		--disable-werror \
 		--without-gd \
-		--enable-kernel=$(call qstrip,$(BR2_TOOLCHAIN_HEADERS_AT_LEAST)) \
-		--with-headers=$(STAGING_DIR)/usr/include)
+		--with-headers=$(STAGING_DIR)/usr/include \
+		$(if $(BR2_aarch64)$(BR2_aarch64_be),--enable-mathvec) \
+		$(GLIBC_CONF_OPTS))
 	$(GLIBC_ADD_MISSING_STUB_H)
 endef
 
@@ -134,7 +177,7 @@ endef
 #
 
 GLIBC_LIBS_LIB = \
-	ld*.so.* libanl.so.* libc.so.* libcrypt.so.* libdl.so.* libgcc_s.so.* \
+	ld*.so.* libanl.so.* libc.so.* libdl.so.* libgcc_s.so.* \
 	libm.so.* libpthread.so.* libresolv.so.* librt.so.* \
 	libutil.so.* libnss_files.so.* libnss_dns.so.* libmvec.so.*
 

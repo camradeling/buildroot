@@ -4,12 +4,13 @@
 #
 ################################################################################
 
-LIBVIRT_VERSION = 7.7.0
+LIBVIRT_VERSION = 7.10.0
 LIBVIRT_SITE = https://libvirt.org/sources
 LIBVIRT_SOURCE = libvirt-$(LIBVIRT_VERSION).tar.xz
 LIBVIRT_LICENSE = LGPL-2.1+
 LIBVIRT_LICENSE_FILES = COPYING
 LIBVIRT_CPE_ID_VENDOR = redhat
+LIBVIRT_INSTALL_STAGING = YES
 LIBVIRT_DEPENDENCIES = \
 	host-libxslt \
 	host-nfs-utils \
@@ -38,7 +39,6 @@ LIBVIRT_CONF_OPTS = \
 	-Ddriver_ch=disabled \
 	-Ddriver_esx=disabled \
 	-Ddriver_hyperv=disabled \
-	-Ddriver_interface=enabled \
 	-Ddriver_libxl=disabled \
 	-Ddriver_openvz=disabled \
 	-Ddriver_remote=enabled \
@@ -62,6 +62,7 @@ LIBVIRT_CONF_OPTS = \
 	-Dpciaccess=enabled \
 	-Dpm_utils=disabled \
 	-Dsanlock=disabled \
+	-Dsasl=disabled \
 	-Dsecdriver_apparmor=disabled \
 	-Dstorage_iscsi=disabled \
 	-Dstorage_iscsi_direct=disabled \
@@ -194,7 +195,10 @@ endif
 
 ifeq ($(BR2_PACKAGE_LIBVIRT_DAEMON),y)
 # Network is used by daemon, only
-LIBVIRT_CONF_OPTS += -Dlibvirtd=enabled -Ddriver_network=enabled
+LIBVIRT_CONF_OPTS += \
+	-Ddriver_interface=enabled \
+	-Ddriver_libvirtd=enabled \
+	-Ddriver_network=enabled
 
 ifeq ($(BR2_PACKAGE_LIBSSH),y)
 LIBVIRT_CONF_OPTS += -Dlibssh=enabled
@@ -211,18 +215,11 @@ else
 LIBVIRT_CONF_OPTS += -Dnss=disabled
 endif
 
-ifeq ($(BR2_PACKAGE_LIBGSASL),y)
-LIBVIRT_CONF_OPTS += -Dsasl=enabled
-LIBVIRT_DEPENDENCIES += libgsasl
-else
-LIBVIRT_CONF_OPTS += -Dsasl=disabled
-endif
-
 ifeq ($(BR2_PACKAGE_LIBSSH2),y)
-LIBVIRT_CONF_OPTS += -Dssh2=enabled
+LIBVIRT_CONF_OPTS += -Dlibssh2=enabled
 LIBVIRT_DEPENDENCIES += libssh2
 else
-LIBVIRT_CONF_OPTS += -Dssh2=disabled
+LIBVIRT_CONF_OPTS += -Dlibssh2=disabled
 endif
 
 ifeq ($(BR2_PACKAGE_LIBVIRT_LXC),y)
@@ -240,7 +237,10 @@ endif
 
 else # BR2_PACKAGE_LIBVIRT_DAEMON
 
-LIBVIRT_CONF_OPTS += -Dlibvirtd=disabled -Ddriver_network=disabled
+LIBVIRT_CONF_OPTS += \
+	-Ddriver_interface=disabled \
+	-Ddriver_libvirtd=disabled \
+	-Ddriver_network=disabled
 
 endif
 
@@ -249,6 +249,36 @@ define LIBVIRT_INSTALL_UDEV_RULES
 		$(TARGET_DIR)/etc/udev/rules.d/90-kvm.rules
 endef
 LIBVIRT_POST_INSTALL_TARGET_HOOKS += LIBVIRT_INSTALL_UDEV_RULES
+
+ifeq ($(BR2_PACKAGE_LIBVIRT_QEMU),y)
+define LIBVIRT_USERS_QEMU
+	qemu -1 kvm -1 * - - - Libvirt qemu/kvm daemon
+endef
+define LIBVIRT_PERMISSIONS_QEMU
+	/var/cache/libvirt/qemu                  d  750  qemu  kvm   -  -  -  -  -
+	/var/cache/libvirt/qemu/capabilities     d  755  root  root  -  -  -  -  -
+	/var/lib/libvirt/qemu                    d  751  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/autostart          d  700  root  root  -  -  -  -  -
+	/var/lib/libvirt/qemu/channel            d  755  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/channel/target     d  755  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/dump               d  755  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/networks           d  700  root  root  -  -  -  -  -
+	/var/lib/libvirt/qemu/networks/autostart d  700  root  root  -  -  -  -  -
+	/var/lib/libvirt/qemu/nvram              d  755  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/save               d  755  qemu  kvm   -  -  -  -  -
+	/var/lib/libvirt/qemu/snapshot           d  755  qemu  kvm   -  -  -  -  -
+	/var/log/libvirt/qemu                    d  750  root  root  -  -  -  -  -
+	/var/log/swtpm/libvirt/qemu              d  711  root  root  -  -  -  -  -
+endef
+define LIBVIRT_CREATE_SYMLINKS_QEMU
+	$(INSTALL) -m 751 -d $(TARGET_DIR)/var/lib/libvirt/qemu
+	ln -s -f ../../var/lib/libvirt/qemu $(TARGET_DIR)/etc/libvirt/
+endef
+endif
+
+define LIBVIRT_USERS
+	$(LIBVIRT_USERS_QEMU)
+endef
 
 # Adjust directory ownerships and permissions. Notice /var/log is a symlink to
 # /tmp in the default sysvinit skeleton, so some directories may disappear at
@@ -263,29 +293,16 @@ define LIBVIRT_PERMISSIONS
 	/var/lib/libvirt/filesystems             d  711  root  root  -  -  -  -  -
 	/var/lib/libvirt/images                  d  711  root  root  -  -  -  -  -
 	/var/lib/libvirt/network                 d  700  root  root  -  -  -  -  -
-	/var/lib/libvirt/qemu                    d  751  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/autostart          d  700  root  root  -  -  -  -  -
-	/var/lib/libvirt/qemu/networks           d  700  root  root  -  -  -  -  -
-	/var/lib/libvirt/qemu/networks/autostart d  700  root  root  -  -  -  -  -
-	/var/lib/libvirt/qemu/channel            d  755  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/channel/target     d  755  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/dump               d  755  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/nvram              d  755  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/save               d  755  qemu  kvm   -  -  -  -  -
-	/var/lib/libvirt/qemu/snapshot           d  755  qemu  kvm   -  -  -  -  -
 	/var/lib/libvirt/secrets                 d  700  root  root  -  -  -  -  -
 	/var/lib/libvirt/storage                 d  755  root  root  -  -  -  -  -
 	/var/lib/libvirt/storage/autostart       d  755  root  root  -  -  -  -  -
 	/var/cache/libvirt                       d  711  root  root  -  -  -  -  -
 	/var/cache/libvirt/lxc                   d  750  root  root  -  -  -  -  -
-	/var/cache/libvirt/qemu                  d  750  qemu  kvm   -  -  -  -  -
-	/var/cache/libvirt/qemu/capabilities     d  755  root  root  -  -  -  -  -
 	/var/log/libvirt                         d  700  root  root  -  -  -  -  -
 	/var/log/libvirt/lxc                     d  750  root  root  -  -  -  -  -
-	/var/log/libvirt/qemu                    d  750  root  root  -  -  -  -  -
 	/var/log/swtpm                           d  755  root  root  -  -  -  -  -
 	/var/log/swtpm/libvirt                   d  755  root  root  -  -  -  -  -
-	/var/log/swtpm/libvirt/qemu              d  711  root  root  -  -  -  -  -
+	$(LIBVIRT_PERMISSIONS_QEMU)
 endef
 
 # libvirt may need to create persistent files (e.g. VM definitions) in these
@@ -296,21 +313,14 @@ endef
 define LIBVIRT_CREATE_SYMLINKS
 	$(INSTALL) -m 700 -d $(TARGET_DIR)/etc/libvirt
 	$(INSTALL) -m 755 -d $(TARGET_DIR)/var/lib/libvirt
-	$(INSTALL) -m 751 -d $(TARGET_DIR)/var/lib/libvirt/qemu
 	$(INSTALL) -m 700 -d $(TARGET_DIR)/var/lib/libvirt/secrets
 	$(INSTALL) -m 755 -d $(TARGET_DIR)/var/lib/libvirt/storage
-	ln -s -f ../../var/lib/libvirt/qemu $(TARGET_DIR)/etc/libvirt/
 	ln -s -f ../../var/lib/libvirt/secrets $(TARGET_DIR)/etc/libvirt/
 	ln -s -f ../../var/lib/libvirt/storage $(TARGET_DIR)/etc/libvirt/
+	$(LIBVIRT_CREATE_SYMLINKS_QEMU)
 endef
 
 LIBVIRT_PRE_INSTALL_TARGET_HOOKS += LIBVIRT_CREATE_SYMLINKS
-
-ifeq ($(BR2_PACKAGE_LIBVIRT_QEMU),y)
-define LIBVIRT_USERS
-	qemu -1 kvm -1 * - - - Libvirt qemu/kvm daemon
-endef
-endif
 
 ifeq ($(BR2_PACKAGE_LIBVIRT_DAEMON),y)
 define LIBVIRT_INSTALL_INIT_SYSV

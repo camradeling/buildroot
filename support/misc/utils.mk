@@ -13,6 +13,8 @@ qstrip = $(strip $(subst ",,$(1)))
 comma := ,
 empty :=
 space := $(empty) $(empty)
+tab := $(empty)	$(empty)
+escape := $(shell printf '\x1b')
 
 # make 4.3:
 # https://lwn.net/Articles/810071/
@@ -38,7 +40,7 @@ SHARP_SIGN := \#
 # In other words, every letter is substituted one by one.
 #
 # The caseconvert-helper allows us to create this definition out of the
-# [FROM] and [TO] lists, so we don't need to write down every substition
+# [FROM] and [TO] lists, so we don't need to write down every substitution
 # manually. The uses of $ and $$ quoting are chosen in order to do as
 # much expansion as possible up-front.
 #
@@ -84,13 +86,17 @@ finddirclauses = $(call notfirstword,$(patsubst %,-o -path '$(1)/%',$(2)))
 # notfirstword(wordlist): returns all but the first word in wordlist
 notfirstword = $(wordlist 2,$(words $(1)),$(1))
 
-# build a comma-separated list of quoted items, from a space-separated
-# list of unquoted items:   a b c d  -->  "a", "b", "c", "d"
-make-comma-list = $(subst $(space),$(comma)$(space),$(patsubst %,"%",$(strip $(1))))
+# build a comma-separated list of items, from a space-separated
+# list of items:   a b c d  -->  a, b, c, d
+make-comma-list = $(subst $(space),$(comma)$(space),$(strip $(1)))
 
-# build a comma-separated list of single quoted items, from a space-separated
+# build a comma-separated list of double-quoted items, from a space-separated
+# list of unquoted items:   a b c d  -->  "a", "b", "c", "d"
+make-dq-comma-list = $(call make-comma-list,$(patsubst %,"%",$(strip $(1))))
+
+# build a comma-separated list of single-quoted items, from a space-separated
 # list of unquoted items:   a b c d  -->  'a', 'b', 'c', 'd'
-make-sq-comma-list = $(subst $(space),$(comma)$(space),$(patsubst %,'%',$(strip $(1))))
+make-sq-comma-list = $(call make-comma-list,$(patsubst %,'%',$(strip $(1))))
 
 # Needed for the foreach loops to loop over the list of hooks, so that
 # each hook call is properly separated by a newline.
@@ -125,7 +131,7 @@ QUOTE = '
 # Once everything has been escaped, it is passed between single quotes
 # (that's why the single-quotes are escaped they way they are, above,
 # and why the dollar sign is not escaped) to printf(1). A trailing
-# newline is apended, too.
+# newline is appended, too.
 #
 # Note: leading or trailing spaces are *not* stripped.
 #
