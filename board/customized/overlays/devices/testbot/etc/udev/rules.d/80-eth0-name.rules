@@ -1,0 +1,1 @@
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", KERNELS=="1c30000.ethernet", NAME="eth0"
