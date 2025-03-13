@@ -93,4 +93,15 @@
 	vcc-pg-supply = <&reg_aldo1>;
 	vcc-ph-supply = <&reg_dldo1>;
 	vcc-pi-supply = <&reg_dldo1>;
+
+	uart5_pins: uart5-pins {
+		pins = "PH2", "PH3";
+		function = "uart5";
+	};
+};
+
+&uart5 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart5_pins>;
+	status = "okay";
 };
