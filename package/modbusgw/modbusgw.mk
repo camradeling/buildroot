@@ -1,4 +1,4 @@
-MODBUSGW_VERSION = v0.9.5
+MODBUSGW_VERSION = v0.9.6
 MODBUSGW_SITE = https://github.com/camradeling/modbusgw.git
 MODBUSGW_SITE_METHOD = git
 MODBUSGW_GIT_SUBMODULES = YES
