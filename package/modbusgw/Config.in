@@ -1,4 +1,4 @@
-config BR2_PACKAGE_MODBUS_GATEWAY
+config BR2_PACKAGE_MODBUSGW
     bool "modbusgw"
     depends on BR2_PACKAGE_MXML
     help
