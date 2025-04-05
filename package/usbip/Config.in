@@ -1,0 +1,13 @@
+config BR2_PACKAGE_USBIP
+   bool "usbip"
+   select BR2_PACKAGE_LIBGLIB2
+   select BR2_PACKAGE_LIBSYSFS
+   help
+     Userspace tools for sharing USB devices over TCP/IP network.
+
+     http://usbip.sourceforge.net/
+
+     This package adds both: client and server support.
+     Note: For exporting or connecting to exported USB devices
+     additional kernel drivers are needed (available since 2.6.28
+     under Stagging).

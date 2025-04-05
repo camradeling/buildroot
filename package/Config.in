@@ -2675,6 +2675,7 @@ endif
 	source "package/uftp/Config.in"
 	source "package/uhttpd/Config.in"
 	source "package/ulogd/Config.in"
+	source "package/usbip/Config.in"
 	source "package/unbound/Config.in"
 	source "package/uqmi/Config.in"
 	source "package/uredir/Config.in"
