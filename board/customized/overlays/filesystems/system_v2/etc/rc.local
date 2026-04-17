@@ -31,11 +31,13 @@ fi
 BOOTPART=$(lsblk -o NAME,LABEL | grep boot$ | awk '{print $1}')
 BOOTPART=/dev/${BOOTPART:2:$((${#BOOTPART}-2))}
 mount ${BOOTPART} /media/boot
-BACKUP_TAG=$(cat /media/boot/default/version.txt)
+BACKUP_TAG=$(cat /media/boot/slot1/version.txt)
 echo "export BACKUP_TAG=$BACKUP_TAG" > /etc/profile.d/backup_tag.sh
 
-if [ -f /etc/recovery_partitions_check.sh ]; then
-        /etc/recovery_partitions_check.sh
+if ! mountpoint -q /media/boot; then
+    echo "ERROR: failed to mount boot partition, skipping recovery check" >&2
+elif [ -f /etc/recovery_partitions_check.sh ]; then
+    /etc/recovery_partitions_check.sh
 fi
 
 for entry in ${SCRIPT_DIR}/*.sh

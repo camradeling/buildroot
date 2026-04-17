@@ -39,7 +39,7 @@ export PLATFORM="orangepi"
 export SRCDTBFILE=sun50i-h618-orangepi-zero3.dtb
 export DTBFILE=sun50i-h618-orangepi-zero3.dtb
 export KERNEL_IMAGE="$(linux_image)"
-export BOOTFILES="\"bootok\", \"boot.scr\""
+export BOOTFILES="\"active\", \"boot.scr\""
 echo "boot files list: ${BOOTFILES}"
 export SRCBOOTINIFILE=boot3.cmd
 export BOOTINIFILE=boot.scr
@@ -71,9 +71,9 @@ genimage \
     --outputpath "${BINARIES_DIR}" \
     --config "${DATA_CFG}"
 
-tune2fs -L work ${BINARIES_DIR}/rootfs.ext2
-cp ${BINARIES_DIR}/rootfs.ext2 ${BINARIES_DIR}/rootfs.ext2_recovery
-tune2fs -L recovery ${BINARIES_DIR}/rootfs.ext2_recovery
+tune2fs -L rootfs1 ${BINARIES_DIR}/rootfs.ext2
+cp ${BINARIES_DIR}/rootfs.ext2 ${BINARIES_DIR}/rootfs.ext2_slot2
+tune2fs -L rootfs2 ${BINARIES_DIR}/rootfs.ext2_slot2
 tune2fs -L data ${BINARIES_DIR}/data.ext4
 
 genimage                           \

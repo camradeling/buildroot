@@ -1,9 +1,10 @@
 [Unit]
-Description = inotify based file syncing Service
+Description=inotify based file syncing Service
 
 [Service]
 Type=simple
 WorkingDirectory=/root
+Environment=PID_FILE=/run/inot.pid
 ExecStart=/sbin/start-stop-daemon -S -m -p ${PID_FILE} -x /usr/sbin/inot.sh
 ExecStop=/sbin/start-stop-daemon -K -x /usr/sbin/inot.sh -p ${PID_FILE} --remove-pidfile --signal INT
 Restart=always
@@ -11,4 +12,3 @@ RestartSec=1s
 
 [Install]
 WantedBy=multi-user.target
-
