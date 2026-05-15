@@ -28,7 +28,6 @@ if [ $? -ne 0 ]; then
 fi
 echo "temporary filesystem mounted"
 ###########################################################################################################################
-mkdir /mnt/lower
 mkdir /mnt/rw
 ###########################################################################################################################
 mkdir /mnt/newroot
@@ -48,7 +47,17 @@ fi
 if [ $? -gt 0 ]; then
     fail "ERROR: could not locate the root device based on fstab"
 fi
-mount -t ${rootFsType} -o ro ${rootDev} /mnt/lower
+# Derive slot name from root partition number (p2=slot1, p3=slot2)
+PARTNUM=${rootDev: -1}
+if [ "${PARTNUM}" == "2" ]; then
+    SLOTNAME=slot1
+elif [ "${PARTNUM}" == "3" ]; then
+    SLOTNAME=slot2
+else
+    SLOTNAME=slot1
+fi
+mkdir /mnt/${SLOTNAME}
+mount -t ${rootFsType} -o ro ${rootDev} /mnt/${SLOTNAME}
 if [ $? -ne 0 ]; then
     fail "ERROR: could not mount original root partition"
 fi
@@ -61,7 +70,7 @@ echo "mounted tmpfs as overlay"
 mkdir -p /mnt/rw/upperdir
 mkdir -p /mnt/rw/workdir
 ###########################################################################################################################
-mount -t overlay -o lowerdir=/mnt/lower,upperdir=/mnt/rw/upperdir,workdir=/mnt/rw/workdir overlayfs-root /mnt/newroot
+mount -t overlay -o lowerdir=/mnt/${SLOTNAME},upperdir=/mnt/rw/upperdir,workdir=/mnt/rw/workdir overlayfs-root /mnt/newroot
 if [ $? -ne 0 ]; then
     fail "ERROR: could not mount overlayFS"
 fi
@@ -89,8 +98,8 @@ fi
 echo "DATAPART = ${DATAPART}"
 DATAPARTNUM=${DATAPART: -1}
 # create mountpoints inside the new root filesystem-overlay
-mkdir -p /mnt/newroot/lower
-mount --move /mnt/lower /mnt/newroot/lower
+mkdir -p /mnt/newroot/${SLOTNAME}
+mount --move /mnt/${SLOTNAME} /mnt/newroot/${SLOTNAME}
 mkdir -p /mnt/newroot/rw
 mount --move /mnt/rw /mnt/newroot/rw
 #expand data fs if needed

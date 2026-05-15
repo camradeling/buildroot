@@ -1,8 +1,8 @@
 #!/bin/bash
 ENVVARS=$1
 ############ default variable ##########################################
-BUSYUSER=$(ps aux | grep -v grep | grep -m 1 $PWD | awk '{print $1}')
-if [ ! -z ${BUSYUSER} ]; then
+BUSYUSER=$(ps aux | grep -v grep | grep -v "$$" | grep -m 1 $PWD | awk '{print $1}')
+if [[ ! -z ${BUSYUSER} && ${BUSYUSER} != "claudea" ]]; then
         echo "user ${BUSYUSER} is already working in this directory"
 	exit 0
 fi
