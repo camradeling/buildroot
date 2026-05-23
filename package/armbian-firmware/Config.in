@@ -33,4 +33,9 @@ config BR2_PACKAGE_ARMBIAN_FIRMWARE_XR819
 	help
 	  Firmware files for XR819 WiFi SDIO chip.
 
+config BR2_PACKAGE_ARMBIAN_FIRMWARE_UWE5622
+	bool "UWE5622 WiFi/BT"
+	help
+	  Firmware files for Unisoc UWE5622 WiFi/BT SDIO combo chip.
+
 endif

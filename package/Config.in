@@ -664,6 +664,7 @@ endmenu
 	source "package/wipe/Config.in"
 	source "package/xorriso/Config.in"
 	source "package/xr819-xradio/Config.in"
+	source "package/uwe5622-wifi/Config.in"
 	source "package/stlink/Config.in"
 endmenu
 

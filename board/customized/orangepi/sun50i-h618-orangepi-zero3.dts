@@ -6,10 +6,19 @@
 /dts-v1/;
 
 #include "allwinner/sun50i-h616-orangepi-zero.dtsi"
+#include <dt-bindings/clock/sun6i-rtc.h>
 
 / {
 	model = "OrangePi Zero3";
 	compatible = "xunlong,orangepi-zero3", "allwinner,sun50i-h618";
+
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rtc CLK_OSC32K_FANOUT>;
+		clock-names = "ext_clock";
+		reset-gpios = <&pio 6 18 GPIO_ACTIVE_LOW>; /* PG18 */
+		post-power-on-delay-ms = <200>;
+	};
 };
 
 &emac0 {
@@ -98,6 +107,16 @@
 		pins = "PH2", "PH3";
 		function = "uart5";
 	};
+};
+
+&mmc1 {
+	vmmc-supply = <&reg_dldo1>;
+	vqmmc-supply = <&reg_aldo1>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	bus-width = <4>;
+	non-removable;
+	mmc-ddr-1_8v;
+	status = "okay";
 };
 
 &uart5 {

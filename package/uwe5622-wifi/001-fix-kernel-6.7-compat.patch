@@ -1,0 +1,66 @@
+--- a/unisocwcn/platform/wcn_boot.c	2026-05-23 16:05:56.661020803 +0500
++++ b/unisocwcn/platform/wcn_boot.c	2026-05-23 16:07:41.866112911 +0500
+@@ -1371,15 +1371,21 @@
+ {
+ 	struct device_node *np;
+ 	int bt_wake_host_gpio, ret = 0;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
+ 	struct gpio_config config;
++#endif
+ 
+ 	np = of_find_compatible_node(NULL, NULL, "allwinner,sunxi-btlpm");
+ 	if (!np) {
+ 		WCN_ERR("dts node for bt_wake not found");
+ 		return -EINVAL;
+ 	}
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
++	bt_wake_host_gpio = of_get_named_gpio(np, "bt_hostwake", 0);
++#else
+ 	bt_wake_host_gpio = of_get_named_gpio_flags(np, "bt_hostwake", 0,
+ 		(enum of_gpio_flags *)&config);
++#endif
+ 	if (!gpio_is_valid(bt_wake_host_gpio)) {
+ 		WCN_ERR("bt_hostwake irq is invalid: %d\n",
+ 			bt_wake_host_gpio);
+@@ -1403,11 +1409,17 @@
+ 
+ 	marlin_dev->bt_wake_host_int_num = gpio_to_irq(bt_wake_host_gpio);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
+ 	WCN_INFO("%s bt_hostwake gpio=%d mul-sel=%d pull=%d "
+ 		 "drv_level=%d data=%d intnum=%d\n",
+ 		 __func__, config.gpio, config.mul_sel, config.pull,
+ 		 config.drv_level, config.data,
+ 		 marlin_dev->bt_wake_host_int_num);
++#else
++	WCN_INFO("%s bt_hostwake gpio=%d intnum=%d\n",
++		 __func__, bt_wake_host_gpio,
++		 marlin_dev->bt_wake_host_int_num);
++#endif
+ 
+ 	ret = device_init_wakeup(dev, true);
+ 	if (ret < 0) {
+--- a/unisocwifi/cfg80211.c	2026-05-23 16:05:56.664020777 +0500
++++ b/unisocwifi/cfg80211.c	2026-05-23 16:07:58.789967571 +0500
+@@ -2050,7 +2050,7 @@
+ 	return ret;
+ }
+ 
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+ static int sprdwl_cfg80211_set_wiphy_params(struct wiphy *wiphy, int link_id, u32 changed)
+ #else
+ static int sprdwl_cfg80211_set_wiphy_params(struct wiphy *wiphy, u32 changed)
+--- a/unisocwifi/cmdevt.c	2026-05-23 16:05:56.664020777 +0500
++++ b/unisocwifi/cmdevt.c	2026-05-23 16:07:50.531038474 +0500
+@@ -3426,7 +3426,9 @@
+ 						NL80211_CHAN_HT20);
+ 		else
+ 			wl_err("%s, ch is null!\n", __func__);
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,19, 2))
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
++		cfg80211_ch_switch_notify(vif->ndev, &chandef, 0, 0);
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 2)
+ 		cfg80211_ch_switch_notify(vif->ndev, &chandef, 0);
+ #else
+ 		cfg80211_ch_switch_notify(vif->ndev, &chandef);

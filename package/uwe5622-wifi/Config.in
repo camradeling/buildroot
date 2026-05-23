@@ -1,0 +1,16 @@
+config BR2_PACKAGE_UWE5622_WIFI
+	bool "uwe5622-wifi"
+	depends on BR2_LINUX_KERNEL
+	depends on BR2_aarch64
+	help
+	  Wireless and Bluetooth driver for Unisoc UWE5622 SDIO
+	  WiFi/BT combo chip, found on OrangePi Zero3 and similar
+	  Allwinner H616/H618 boards.
+
+	  This builds three kernel modules:
+	    - uwe5622_bsp_sdio (SDIO platform/boot)
+	    - sprdwl_ng (WiFi, cfg80211-based)
+	    - sprdbt_tty (Bluetooth over SDIO)
+
+comment "uwe5622-wifi needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL

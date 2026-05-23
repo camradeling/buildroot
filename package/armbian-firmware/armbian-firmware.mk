@@ -52,6 +52,13 @@ ARMBIAN_FIRMWARE_FILES += \
 	xr819/sdd_xr819.bin
 endif
 
+# UWE5622 WiFi/BT firmware
+ifeq ($(BR2_PACKAGE_ARMBIAN_FIRMWARE_UWE5622),y)
+ARMBIAN_FIRMWARE_FILES += \
+	wcnmodem.bin \
+	wifi_2355b001_1ant.ini
+endif
+
 ifneq ($(ARMBIAN_FIRMWARE_FILES),)
 define ARMBIAN_FIRMWARE_INSTALL_FILES
 	cd $(@D) && \
