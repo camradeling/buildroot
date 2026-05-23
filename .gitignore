@@ -13,3 +13,4 @@
 *.rej
 *~
 *.pyc
+board/customized/orangepi/orangepi3-test.vars

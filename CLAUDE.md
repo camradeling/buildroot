@@ -12,30 +12,34 @@ Target boards:
 
 ## Build Commands
 
+All builds are driven by the top-level `build.sh`:
+
 ```bash
-# Configure for OrangePi Zero (from output_orangepi/)
-cd output_orangepi && ./config.sh    # runs make menuconfig
+# Full build for OrangePi Zero3
+./build.sh orangepi3
 
-# Configure for OrangePi Zero3 (from output_orangepi3/)
-cd output_orangepi3 && ./config.sh
+# Full build for OrangePi Zero
+./build.sh orangepi
 
-# Build (from the output_* directory)
-./build.sh                           # sources default.vars, runs make -j8
-./build.sh test.vars                 # build with alternate variable set
+# Build both targets
+./build.sh orangepi orangepi3
 
-# Build from top-level with out-of-tree output
-make O=output_orangepi3
-make O=output_orangepi
+# Build with alternate vars file
+./build.sh orangepi3 board/customized/orangepi/orangepi3-test.vars
+
+# Run menuconfig
+./build.sh orangepi3 menuconfig
 
 # Apply a defconfig from top-level
 make O=output_orangepi3 testbot3_defconfig
 make O=output_orangepi testbot_defconfig
 
-# Standard Buildroot package operations (from output dir)
-make <pkg>-rebuild                   # force rebuild single package
-make <pkg>-dirclean                  # clean single package
-make menuconfig                      # reconfigure
+# Standard Buildroot package operations (from top-level)
+make O=output_orangepi3 <pkg>-rebuild    # force rebuild single package
+make O=output_orangepi3 <pkg>-dirclean   # clean single package
 ```
+
+`build.sh` auto-initializes the output directory from the target's defconfig if `.config` is missing, sources the vars file, then runs `make -j8`.
 
 Build output lands in `output_orangepi3/images/` (or `output_orangepi/images/`). The key artifact is `sdcard.img` — write it to SD with `dd`.
 
@@ -76,12 +80,18 @@ Power-fail safe: active marker is only written after dd completes successfully.
 | `board/customized/overlays/devices/` | Per-device udev rules |
 | `board/customized/scripts/createfs-scripts/` | Numbered post-build scripts (network, hostname, services, SSH keys) |
 | `board/customized/scripts/before-fs-allscripts.sh` | Post-build hook that runs all createfs-scripts in order |
-| `output_orangepi/default.vars` | Build-time environment config (hostname, network, GPIO, VPN, USB gadget) |
-| `output_orangepi3/default.vars` | Same for Zero3 |
+| `board/customized/orangepi/orangepi3.vars` | Build-time environment config for Zero3 (hostname, network, GPIO, VPN, USB gadget) |
+| `board/customized/orangepi/orangepi.vars` | Same for Zero |
+| `build.sh` | Top-level build script (target selection, vars sourcing, auto-init) |
 
-## Environment Variables (default.vars)
+## Environment Variables (vars files)
 
-These are sourced by `build.sh` and consumed by the createfs post-build scripts:
+Vars files live in `board/customized/orangepi/` and are sourced by `build.sh`:
+- `orangepi3.vars` — production config for Zero3
+- `orangepi3-test.vars` — test config for Zero3
+- `orangepi.vars` — config for Zero
+
+These are consumed by the createfs post-build scripts:
 
 - `BOARD_VERSION` — board identifier
 - `DEV_HOSTNAME` — device hostname
@@ -90,6 +100,17 @@ These are sourced by `build.sh` and consumed by the createfs post-build scripts:
 - `SSH_KEY_FILES_LIST` — authorized SSH public keys
 - `USB_GADGET_DEVICE`, `USB_RNDIS` — USB gadget config
 - `WIFI_CLIENT`, `WLAN_SSID`, `WLAN_PSK` — WiFi client config
+
+## Claude Code Skills
+
+Project-specific skills are in `.claude/skills/`:
+
+| Skill | Description |
+|-------|-------------|
+| `build-buildroot` | Build for OrangePi Zero3/Zero — full build, package rebuild, linux rebuild |
+| `deploy-buildroot` | Deploy OTA update to target device |
+| `flash-sdcard` | Flash sdcard.img to SD card via dd |
+| `loadcontext-buildroot` | Load all project context files into conversation |
 
 ## Current Branch: ota-ab-redesign
 
