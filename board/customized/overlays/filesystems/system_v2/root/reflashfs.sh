@@ -21,7 +21,7 @@ if [ -f "${UPDIR}/rootfs.sha256" ]; then
 fi
 
 # Copy kernel files to target boot slot (staged as .new until dd completes)
-cp "${UPDIR}/zImage"      /media/boot/${TARGET_BOOTDIR}/zImage.new
+cp "${UPDIR}/Image"       /media/boot/${TARGET_BOOTDIR}/Image.new
 cp "${UPDIR}"/*.dtb       /media/boot/${TARGET_BOOTDIR}/
 cp "${UPDIR}/version.txt" /media/boot/${TARGET_BOOTDIR}/version.txt
 sync
@@ -32,7 +32,7 @@ dd if="${UPDIR}/rootfs.ext2" of="${TARGET_PART}" bs=1M conv=fsync
 echo "Rootfs flashed."
 
 # Finalize kernel file (atomic rename from staged .new)
-mv /media/boot/${TARGET_BOOTDIR}/zImage.new /media/boot/${TARGET_BOOTDIR}/zImage
+mv /media/boot/${TARGET_BOOTDIR}/Image.new /media/boot/${TARGET_BOOTDIR}/Image
 sync
 
 # Remove update source

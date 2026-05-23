@@ -1,11 +1,16 @@
 #!/bin/bash
 set -e
 FILENAME=${1}
+
+LOWER=$(cat /proc/mounts | grep "overlay" | head -1 | sed 's/.*lowerdir=\([^,]*\).*/\1/')
+if [ -z "${LOWER}" ]; then
+    echo "ERROR: could not determine lower mount" >&2
+    exit 1
+fi
+
 DIRNAME=$(dirname ${FILENAME})
-echo "DIRNAME == ${DIRNAME}"
-echo "PWD == ${PWD}"
 if [[ ${DIRNAME:0:1} == "/" ]]; then
-        rsync ${FILENAME} /lower/${FILENAME}
+    rsync ${FILENAME} ${LOWER}${FILENAME}
 else
-        rsync ${FILENAME} /lower/${PWD}/${FILENAME}
+    rsync ${FILENAME} ${LOWER}${PWD}/${FILENAME}
 fi

@@ -1,12 +1,10 @@
 #!/bin/bash
-if [ ! -f /etc/ssh/ssh_host_dsa_key ]; then
-	ssh-keygen -A
-	rsave /etc/ssh/ssh_host_dsa_key
-	rsave /etc/ssh/ssh_host_dsa_key.pub
-	rsave /etc/ssh/ssh_host_ecdsa_key
-    rsave /etc/ssh/ssh_host_ecdsa_key.pub
-    rsave /etc/ssh/ssh_host_ed25519_key
-    rsave /etc/ssh/ssh_host_ed25519_key.pub
-    rsave /etc/ssh/ssh_host_rsa_key
-    rsave /etc/ssh/ssh_host_rsa_key.pub
+PERSIST_DIR=/media/data/ssh
+
+if [ -d "${PERSIST_DIR}" ]; then
+    cp ${PERSIST_DIR}/ssh_host_*_key* /etc/ssh/
+else
+    ssh-keygen -A
+    mkdir -p ${PERSIST_DIR}
+    cp /etc/ssh/ssh_host_*_key* ${PERSIST_DIR}/
 fi

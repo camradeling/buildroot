@@ -118,7 +118,7 @@ pivot_root . mnt
 exec chroot . sh -c "$(cat <<END
 ##################################################### in pivot root ####################################################
 umount /mnt/proc
-mount -o rw,remount /lower
+mount -o rw,remount /${SLOTNAME}
 echo "expanding data filesystem"
 if [[ ${NEEDRESIZE} == "true" ]]; then
 	/root/expandfs.sh /mnt/dev/mmcblk${mmcnum} ${DATAPARTNUM} > /root/expandfs.log
