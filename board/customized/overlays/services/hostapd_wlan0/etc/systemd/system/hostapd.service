@@ -5,8 +5,10 @@ After=sys-subsystem-net-devices-wlan0.device network.target sshd.service rc-loca
 
 [Service]
 Type=simple
+ExecStartPost=/etc/scripts/wlan0-ap-setup.sh start
 ExecStart=/sbin/start-stop-daemon -S -x /sbin/hostapd -- /etc/hostapd.conf
 ExecStop=/sbin/start-stop-daemon -K -x /sbin/hostapd --signal INT
+ExecStopPost=/etc/scripts/wlan0-ap-setup.sh stop
 Restart=always
 RestartSec=5s
 

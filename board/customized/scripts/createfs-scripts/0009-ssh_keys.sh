@@ -17,3 +17,6 @@ do
 	KEYVAL=$(cat ${filename} | sed -E "s:(ssh-rsa) (.*) (.*):\1 \2:g")
 	echo ${KEYVAL} >> ${AUTH_KEY_FILE}
 done
+
+chmod 700 "${TARGET_DIR}/root/.ssh"
+chmod 600 "${AUTH_KEY_FILE}"
