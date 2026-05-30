@@ -58,6 +58,9 @@ elif [[ "${DEVICE_STATIC_ADDR}" == "ON" ]]; then
 	set_space "  netmask" ${DEVICE_STATIC_NETMASK} ${FILENAME}
 	if [[ ! -z ${DEVICE_STATIC_GATEWAY} ]]; then
 		set_space "  gateway" ${DEVICE_STATIC_GATEWAY} $FILENAME
+		if [[ "${DEVICE_DHCP_ADDR}" == "ON" ]]; then
+			set_space "  metric" "100" ${FILENAME}
+		fi
 	fi
 else
 	print_red "ERROR: DEVICE_STATIC_ADDR=${DEVICE_STATIC_ADDR}. Only ON or OFF"
