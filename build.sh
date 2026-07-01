@@ -65,6 +65,7 @@ for TARGET in "${TARGETS[@]}"; do
 
     if [ ! -f "$OUTDIR/.config" ]; then
         echo "Initializing $TARGET ($DEFCONF)..."
+        mkdir -p "$OUTDIR"
         make -C "$SCRIPT_DIR" O="$OUTDIR" "$DEFCONF"
     fi
 
