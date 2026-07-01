@@ -1,0 +1,21 @@
+config BR2_PACKAGE_SERIAL_MUX
+	bool "serial_mux"
+	help
+	  Serial port multiplexer. Allows multiple clients to share
+	  a single serial port via Unix domain sockets.
+
+if BR2_PACKAGE_SERIAL_MUX
+
+config BR2_PACKAGE_SERIAL_MUX_ENABLE_ISP
+	bool "Enable serial_mux@isp service"
+	default y
+	help
+	  Enable the ISP serial mux instance at boot.
+
+config BR2_PACKAGE_SERIAL_MUX_ENABLE_MCU
+	bool "Enable serial_mux@mcu service"
+	default y
+	help
+	  Enable the MCU serial mux instance at boot.
+
+endif
