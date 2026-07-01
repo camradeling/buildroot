@@ -1,0 +1,19 @@
+config BR2_PACKAGE_SSTAR_FLASH
+	bool "sstar-flash"
+	help
+	  Linux tool for flashing SigmaStar SoCs over USB.
+	  Uses SCSI Generic (SG_IO) to send vendor commands to the
+	  SoC's ROM bootloader / U-Boot over USB Mass Storage.
+
+	  https://github.com/vdenisov-c-arlo/LoryUSBTool
+
+if BR2_PACKAGE_SSTAR_FLASH
+
+config BR2_PACKAGE_SSTAR_FLASH_UDEV_RULES
+	bool "Install udev rules"
+	default y
+	help
+	  Install udev rules granting unprivileged access to
+	  SigmaStar USB boot devices (VID:PID 1b20:0300, 1a40:0201).
+
+endif
