@@ -1,0 +1,15 @@
+[Unit]
+Description=wpa_supplicant for wlan1 (WiFi client)
+Wants=network.target
+After=sys-subsystem-net-devices-wlan1.device network.target sshd.service rc-local.service
+
+[Service]
+Type=simple
+ExecStart=/sbin/wpa_supplicant -i wlan1 -c /etc/wpa_supplicant_wlan1.conf
+ExecStartPost=/etc/scripts/wlan1-client-setup.sh start
+ExecStopPost=/etc/scripts/wlan1-client-setup.sh stop
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

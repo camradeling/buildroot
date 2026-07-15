@@ -1,0 +1,30 @@
+comment "aic8800 needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL
+
+config BR2_PACKAGE_AIC8800
+	bool "aic8800"
+	depends on BR2_LINUX_KERNEL
+	help
+	  AIC8800 USB WiFi driver (aic_load_fw + aic8800_fdrv kernel
+	  modules) and firmware for AIC Semiconductor 8800-series chips.
+
+	  Supports AIC8800, AIC8800D80, AIC8800DC and variants.
+
+	  https://github.com/radxa-pkg/aic8800
+
+if BR2_PACKAGE_AIC8800
+
+config BR2_PACKAGE_AIC8800_BTUSB
+	bool "Bluetooth support (aic_btusb)"
+	help
+	  Also build and install the aic_btusb kernel module for
+	  Bluetooth over USB.
+
+endif
+
+config BR2_PACKAGE_HOST_AIC8800
+	bool "host aic8800"
+	help
+	  Build aic8800 WiFi kernel modules (aic_load_fw + aic8800_fdrv)
+	  for the host machine's running kernel, and install firmware.
+	  Useful when the WiFi adapter is plugged into the dev machine.
