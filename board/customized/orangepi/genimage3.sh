@@ -41,7 +41,7 @@ export DTBFILE=sun50i-h618-orangepi-zero3.dtb
 export KERNEL_IMAGE="$(linux_image)"
 export BOOTFILES="\"active\", \"boot.scr\""
 echo "boot files list: ${BOOTFILES}"
-export SRCBOOTINIFILE=boot3.cmd
+export SRCBOOTINIFILE=${SRCBOOTINIFILE:-boot3.cmd}
 export BOOTINIFILE=boot.scr
 export UBOOTBIN="$(uboot_image)"
 export SDCARD_IMAGE=sdcard.img
