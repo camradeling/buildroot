@@ -2936,6 +2936,7 @@ endmenu
 menu "Extra"
 	source "package/rtl88XX-special/Config.in"
 	source "package/modbusgw/Config.in"
+	source "package/modbusgw_gpio/Config.in"
 endmenu
 
 endmenu

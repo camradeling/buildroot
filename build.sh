@@ -8,11 +8,13 @@ JOBS=8
 declare -A DEFCONFIG=(
     [orangepi]=testbot_defconfig
     [orangepi3]=testbot3_defconfig
+    [testbot4]=testbot4_defconfig
 )
 
 declare -A DEFAULT_VARS=(
     [orangepi]="$BOARD_DIR/orangepi.vars"
     [orangepi3]="$BOARD_DIR/orangepi3.vars"
+    [testbot4]="$BOARD_DIR/orangepi4-test.vars"
 )
 
 usage() {

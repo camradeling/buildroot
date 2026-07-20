@@ -1,0 +1,12 @@
+# Arlo camera serial console udev rules (for voodoo board)
+# Deploy to /etc/udev/rules.d/ on the voodoo board
+#
+# Creates stable symlinks regardless of enumeration order:
+#   /dev/ttyISP -> ISP Linux console (FTDI FT2232 channel B)
+#   /dev/ttyMCU -> MCU RTOS console (Prolific composite interface 2)
+
+# ISP console (FTDI FT2232 channel B, interface 1)
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="0403", ENV{ID_MODEL_ID}=="6010", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="ttyISP"
+
+# MCU console (Prolific, interface 2)
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="067b", ENV{ID_MODEL_ID}=="2543", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="ttyMCU"

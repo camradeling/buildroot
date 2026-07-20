@@ -1,0 +1,2 @@
+# Rename onboard ethernet to eth0
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", KERNEL=="end0", NAME="eth0"
