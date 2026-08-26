@@ -11,14 +11,28 @@ sed -i -E "s/export WIFI_AP_ADDR=.*/export WIFI_AP_ADDR=${WIFI_AP_ADDR}/g" ${TAR
 print_green "WIFI_AP_ADDR=${WIFI_AP_ADDR}"
 sed -i -E "s/export WIFI_AP_NETMASK=.*/export WIFI_AP_NETMASK=${WIFI_AP_NETMASK}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "WIFI_AP_NETMASK=${WIFI_AP_NETMASK}"
+sed -i -E "s/export WIFI_AP_WAN_IFACE=.*/export WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+print_green "WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}"
 
-## patch hostapd.conf with SSID and PSK
+## patch hostapd.conf with SSID, PSK and channel
 HOSTAPD_CONF="${TARGET_DIR}/etc/hostapd.conf"
 if [[ -f "${HOSTAPD_CONF}" ]] && [[ ! -z "${WIFI_AP_SSID}" ]]; then
 	sed -i -E "s/^ssid=.*/ssid=${WIFI_AP_SSID}/g" ${HOSTAPD_CONF}
 	print_green "WIFI_AP_SSID=${WIFI_AP_SSID}"
 	sed -i -E "s/^wpa_passphrase=.*/wpa_passphrase=${WIFI_AP_PSK}/g" ${HOSTAPD_CONF}
 	print_green "WIFI_AP_PSK=${WIFI_AP_PSK}"
+	if [[ ! -z "${WIFI_AP_CHANNEL}" ]]; then
+		sed -i -E "s/^channel=.*/channel=${WIFI_AP_CHANNEL}/g" ${HOSTAPD_CONF}
+		if [[ ${WIFI_AP_CHANNEL} -gt 14 ]]; then
+			sed -i -E '/^hw_mode=/d' ${HOSTAPD_CONF}
+			sed -i -E "/^channel=/a hw_mode=a" ${HOSTAPD_CONF}
+		fi
+		print_green "WIFI_AP_CHANNEL=${WIFI_AP_CHANNEL}"
+	fi
+	if [[ "${WIFI_AP_BSS_TRANSITION:-OFF}" == "ON" ]]; then
+		sed -i -E "s/^bss_transition=.*/bss_transition=1/g" ${HOSTAPD_CONF}
+		print_green "WIFI_AP_BSS_TRANSITION=ON"
+	fi
 fi
 
 ## patch dnsmasq.conf dhcp-range based on WIFI_AP_ADDR/WIFI_AP_NETMASK

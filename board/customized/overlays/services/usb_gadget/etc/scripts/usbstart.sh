@@ -66,6 +66,7 @@ if [ ! -z ${USB_RNDIS} ] && [ ${USB_RNDIS} == "ON" ]; then
 	sleep 0.2
 	. /etc/profile.d/usbaddr.sh
 	ifconfig usb0 ${USB_ADDR} up
+	ip route add default via 192.168.100.75 dev usb0 metric 1000
 	rm /var/lib/misc/dnsmasq.leases
 fi
 
