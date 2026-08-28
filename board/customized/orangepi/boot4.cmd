@@ -15,7 +15,7 @@ if fatload mmc 0:1 ${kernel_addr_r} active 1; then
     fi
 fi
 
-setenv bootargs "console=ttyS0,115200 earlyprintk root=${rootpart} rootwait init=/sbin/overlayroot2.sh"
+setenv bootargs "console=ttyS0,115200 earlyprintk root=${rootpart} rootwait net.ifnames=1 init=/sbin/overlayroot2.sh"
 fatload mmc 0 ${kernel_addr_r} ${bootslot}/Image
 fatload mmc 0 ${fdt_addr_r} ${bootslot}/sun50i-h618-orangepi-zero3.dtb
 booti ${kernel_addr_r} - ${fdt_addr_r}
