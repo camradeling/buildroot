@@ -1,0 +1,22 @@
+# Sourced by /sbin/dhclient-script after it has applied a lease, for every
+# interface. Installed by the QUECTEL_ECM option.
+#
+# dhclient-script installs the DHCP default route with a hardcoded metric (50 in
+# the BOUND path, none at all in the TIMEOUT path) and ignores IF_METRIC. The
+# modem must not compete with eth0/wlan for the default route, so replace
+# whatever it put in with a single high-metric route.
+
+if [ "${interface}" = "wwan0" ]; then
+	case "${reason}" in
+	BOUND|RENEW|REBIND|REBOOT|TIMEOUT)
+		# there can be one per router handed out in the lease
+		for _i in 1 2 3 4 5; do
+			ip route del default dev "${interface}" 2>/dev/null || break
+		done
+		if [ -n "${new_routers}" ]; then
+			ip route add default via "${new_routers%% *}" \
+				dev "${interface}" metric 700
+		fi
+		;;
+	esac
+fi

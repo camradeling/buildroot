@@ -1,0 +1,7 @@
+# Quectel ECM network function (VID 2c7c) -> wwan0
+#
+# With net.ifnames=1 the predictable name is enx<mac>, which differs per modem,
+# so no static config could reference it. Named here and not in
+# 99-quectel-ecm.rules: the rule has to run before 80-net-setup-link.rules,
+# otherwise NAME is already set and this assignment is ignored.
+SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", NAME="wwan0"

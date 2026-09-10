@@ -1,0 +1,21 @@
+[Unit]
+Description=Configure the Quectel ECM network interface
+# Started on demand by udev (99-quectel-ecm.rules) when the ECM net device
+# appears, not enabled at boot. No RemainAfterExit: the modem re-enumerates
+# after a mode switch or a replug, and an "active" unit would not be re-run.
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/scripts/quectel_ecm_up.sh
+# ifup daemonizes dhclient, and the default KillMode=control-group makes systemd
+# SIGTERM everything left in the cgroup the moment this oneshot deactivates - so
+# dhclient was killed in the same second it logged "bound to ... renewal in
+# 40247 seconds", leaving wwan0 with an address nobody would ever renew.
+# KillMode=process limits the kill to ExecStart itself.
+#
+# This is a stopgap for the ifupdown shape. Phase 1 of workplans/002 replaces
+# the whole unit with the dhclient_wlan1.service shape (Type=simple,
+# BindsTo=sys-subsystem-net-devices-wwan0.device, dhclient -d, Restart=always),
+# where the client is the main process and no KillMode override is needed.
+KillMode=process

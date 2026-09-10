@@ -1,0 +1,13 @@
+# Quectel modem ECM uplink. Picked up through "source-directory
+# /etc/network/interfaces.d" in /etc/network/interfaces.
+#
+# Deliberately no "auto"/"allow-hotplug": the interface exists only while a
+# modem is plugged in, and "ifup -a" at boot would wait for DHCP on a board
+# without one. /etc/scripts/quectel_ecm_up.sh runs "ifup wwan0" from udev
+# instead, when the ECM net device shows up.
+#
+# The modem answers DHCP from its own internal server (192.168.225.0/24 on the
+# EC200A). It hands out a default route as well, which /etc/dhclient-exit-hooks
+# demotes to metric 700 so eth0 and wlan keep priority - the "metric" option
+# below would be ignored, our dhclient-script does not honour IF_METRIC.
+iface wwan0 inet dhcp

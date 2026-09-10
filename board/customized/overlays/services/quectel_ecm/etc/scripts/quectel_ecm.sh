@@ -118,6 +118,45 @@ if [ -z "${AT_PORT}" ]; then
 	exit 1
 fi
 
+# Bind the data call to the USB network device. Without this the ECM link comes
+# up perfectly - the host gets a lease from the modem's internal DHCP server and
+# can ping the modem at 192.168.43.1 - but nothing is forwarded to the PDP
+# context, so there is no internet. Seen on an EC200A that reported
+# "+QNETDEVCTL: 0,0,0,0" while +CGACT/+CGPADDR showed an active context with a
+# carrier IP, which makes it look like a routing problem on our side.
+#
+# The third argument is autoconnect, so the modem redials by itself after a
+# reset. Asserted on every plug-in anyway: it is a per-modem setting, so a
+# replacement modem arrives with it unset.
+#
+# Note AT+QCFG="nat" is deliberately left alone - traffic flows with nat=0.
+function ensure_netdev_bound()
+{
+	local state
+
+	state=$(at_cmd ${AT_PORT} 'AT+QNETDEVCTL?' 2 | sed -n -E 's/.*\+QNETDEVCTL: *([0-9,]+).*/\1/p' | head -1)
+	if [ -z "${state}" ]; then
+		log "AT+QNETDEVCTL not supported on this modem, skipping the data call binding"
+		return 0
+	fi
+
+	case "${state}" in
+	1,1,*)
+		log "data call already bound to the net device (+QNETDEVCTL: ${state})"
+		return 0
+		;;
+	esac
+
+	log "data call not bound (+QNETDEVCTL: ${state}), binding it with autoconnect"
+	if at_cmd ${AT_PORT} 'AT+QNETDEVCTL=1,1,1' 3 | grep -q "OK"; then
+		log "AT+QNETDEVCTL=1,1,1 accepted"
+	else
+		log "ERROR: modem refused AT+QNETDEVCTL=1,1,1, wwan0 will have no uplink"
+	fi
+}
+
+ensure_netdev_bound
+
 ## read the current usbnet mode
 MODE=$(at_cmd ${AT_PORT} 'AT+QCFG="usbnet"' 2 | sed -n -E 's/.*\+QCFG: "usbnet",([0-9]+).*/\1/p' | head -1)
 

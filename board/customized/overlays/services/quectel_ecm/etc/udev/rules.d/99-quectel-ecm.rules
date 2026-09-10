@@ -5,3 +5,10 @@
 # per serial interface. The switch itself runs as a systemd oneshot, because the
 # modem has to be reset afterwards and udev must not be blocked that long.
 ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm.service"
+
+# Once the modem is in ECM mode its network function shows up as a separate net
+# device (renamed to wwan0 by 79-quectel-ecm-name.rules). Nothing else in the
+# image would configure it: there is no 80-ifupdown.rules here, so allow-hotplug
+# never fires, and putting the modem in "ifup -a" would make every boot without
+# a modem wait for DHCP. So configure it from udev, on plug-in only.
+SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
