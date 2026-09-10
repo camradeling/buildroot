@@ -22,7 +22,6 @@ mkdir -p /var/lib/misc/
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
 mkdir -p /var/lib/dhcp/
-ip rule add blackhole iif tap_l2
 
 if [ ! -d /media/boot ]; then
         mkdir /media/boot
