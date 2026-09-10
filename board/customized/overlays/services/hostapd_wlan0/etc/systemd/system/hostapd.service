@@ -2,6 +2,11 @@
 Description=Hostapd IEEE 802.11 AP, IEEE 802.1X/WPA/WPA2/EAP/RADIUS Authenticator
 Wants=network.target
 After=sys-subsystem-net-devices-wlan0.device network.target sshd.service rc-local.service
+# Buildroot runs "systemctl preset-all" *after* the post-build scripts and its
+# default policy is enable, so the .wants link is recreated on every build no
+# matter what WIFI_AP says. The config file is what the build actually controls:
+# 0010-wifi_ap_service.sh removes it when WIFI_AP != ON.
+ConditionPathExists=/etc/hostapd.conf
 
 [Service]
 Type=simple

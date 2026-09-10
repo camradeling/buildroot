@@ -79,7 +79,8 @@ Power-fail safe: active marker is only written after dd completes successfully.
 | `board/customized/overlays/services/` | Optional service overlays (openvpn, hostapd, ssh, usb_gadget, etc.) |
 | `board/customized/overlays/devices/` | Per-device udev rules |
 | `board/customized/scripts/createfs-scripts/` | Numbered post-build scripts (network, hostname, services, SSH keys) |
-| `board/customized/scripts/before-fs-allscripts.sh` | Post-build hook that runs all createfs-scripts in order |
+| `board/customized/scripts/before-fs-allscripts.sh` | Post-build hook that runs all createfs-scripts in order (aborts the build on the first non-zero exit) |
+| `board/customized/scripts/after-preset-check.sh` | Post-**fakeroot** hook (testbot4 only): asserts that the systemd units enabled by Buildroot's `preset-all` match `/etc/system.vars`. See "Optional services" below |
 | `board/customized/orangepi/orangepi3.vars` | Build-time environment config for Zero3 (hostname, network, GPIO, VPN, USB gadget) |
 | `board/customized/orangepi/orangepi.vars` | Same for Zero |
 | `build.sh` | Top-level build script (target selection, vars sourcing, auto-init) |
@@ -100,7 +101,36 @@ These are consumed by the createfs post-build scripts:
 - `SSH_KEY_FILES_LIST` — authorized SSH public keys
 - `USB_GADGET_DEVICE`, `USB_RNDIS` — USB gadget config
 - `WIFI_CLIENT`, `WLAN_SSID`, `WLAN_PSK` — WiFi client config
-- `QUECTEL_ECM` — install the udev hook that switches a plugged Quectel modem to ECM
+- `QUECTEL_ECM` — install the udev hooks that switch a plugged Quectel modem to ECM and bring its `wwan0` uplink up (DHCP, default route at metric 700)
+
+## Optional Services — how ON/OFF actually works
+
+Buildroot runs `systemctl --root=$(TARGET_DIR) preset-all` as a systemd
+`ROOTFS_PRE_CMD_HOOK`, i.e. **after** the post-build scripts, and the default
+preset policy is *enable*. So a createfs script cannot disable a service by
+removing its `multi-user.target.wants` link — the link is recreated on every
+build. (Also note the fakeroot stage operates on a throwaway copy of `target/`,
+which is why those links appear in `rootfs.ext2` but never in `output_*/target/`.)
+
+The convention for anything switchable is therefore:
+
+```
+optional service = [Install] kept (let preset-all enable it)
+                 + Condition*= in the unit, pointing at a config file
+                 + the createfs script deletes that config file when the var is OFF
+```
+
+Examples: `hostapd.service` → `/etc/hostapd.conf` (`0010`),
+`wpa_supplicant_wlan1.service` → `/etc/wpa_supplicant_wlan1.conf` (`0011`),
+`openvpn@.service` → `/etc/openvpn/%i.conf` (`0008`). Genuine systemd templates
+(`foo@.service`) are not touched by `preset-all` at all, so instances of them are
+enabled only by the createfs scripts.
+
+`after-preset-check.sh` enforces this: it fails the build if an enabled unit has
+no condition, if an ON feature is missing its config, if an OFF feature still
+ships one, or if a unit's `ConditionPathExists=` does not point at the file the
+build actually manages. When adding a service, either follow the pattern or add
+the unit to that script's `ALWAYS_ON` list.
 
 ## Claude Code Skills
 

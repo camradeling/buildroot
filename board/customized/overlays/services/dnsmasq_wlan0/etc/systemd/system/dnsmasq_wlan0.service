@@ -2,6 +2,9 @@
 Description=dnsmasq
 Wants=network.target
 After=sys-subsystem-net-devices-wlan0.device network.target sshd.service rc-local.service hostapd.service
+# See hostapd.service: preset-all enables this unconditionally, so the real
+# switch is the config file (removed by 0010-wifi_ap_service.sh when WIFI_AP != ON).
+ConditionPathExists=/etc/dnsmasq_wlan0.conf
 
 [Service]
 Type=simple

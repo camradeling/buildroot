@@ -2,6 +2,8 @@
 Description=DHCP client for wlan1
 Wants=network.target
 After=wpa_supplicant_wlan1.service
+# Same gate as wpa_supplicant_wlan1.service: no client config, no DHCP on wlan1.
+ConditionPathExists=/etc/wpa_supplicant_wlan1.conf
 
 [Service]
 Type=simple

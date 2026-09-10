@@ -2,6 +2,10 @@
 Description=wpa_supplicant for wlan1 (WiFi client)
 Wants=network.target
 After=sys-subsystem-net-devices-wlan1.device network.target sshd.service rc-local.service
+# preset-all recreates the .wants link after 0011-wifi_client_service.sh has run,
+# so without this a WIFI_CLIENT=OFF image still associates to WLAN_SSID and
+# installs a default route. 0011 removes the config when WIFI_CLIENT != ON.
+ConditionPathExists=/etc/wpa_supplicant_wlan1.conf
 
 [Service]
 Type=simple

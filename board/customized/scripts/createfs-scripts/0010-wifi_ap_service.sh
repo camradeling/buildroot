@@ -14,6 +14,16 @@ print_green "WIFI_AP_NETMASK=${WIFI_AP_NETMASK}"
 sed -i -E "s/export WIFI_AP_WAN_IFACE=.*/export WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}"
 
+## hostapd.service and dnsmasq_wlan0.service are enabled by preset-all no matter
+## what WIFI_AP says (preset-all runs after the post-build scripts), so the
+## config files are the real switch - both units have ConditionPathExists on them
+if [[ "${WIFI_AP}" != "ON" ]]; then
+	delete_file_silent ${TARGET_DIR}/etc/hostapd.conf
+	delete_file_silent ${TARGET_DIR}/etc/dnsmasq_wlan0.conf
+	print_green "INFO: WIFI_AP is OFF, hostapd.conf and dnsmasq_wlan0.conf removed"
+	exit 0
+fi
+
 ## patch hostapd.conf with SSID, PSK and channel
 HOSTAPD_CONF="${TARGET_DIR}/etc/hostapd.conf"
 if [[ -f "${HOSTAPD_CONF}" ]] && [[ ! -z "${WIFI_AP_SSID}" ]]; then

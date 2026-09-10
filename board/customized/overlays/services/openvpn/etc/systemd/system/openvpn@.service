@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenVPN connection to %i
+After=network.target
+# A real template (openvpn@.service), not the two concrete openvpn@client.service
+# / openvpn@server.service files this replaces. Those had a literal "@" in the
+# name, so "systemctl preset-all" treated them as ordinary units and enabled both
+# on every build -- including openvpn@server.service, for which no
+# /etc/openvpn/server.conf has ever existed. preset-all does not enable
+# templates, so the only thing that creates a link here is
+# 0008-vpn_client_service.sh, and this condition keeps an enabled instance from
+# starting if its config is missing.
+ConditionPathExists=/etc/openvpn/%i.conf
+
+[Service]
+Type=forking
+ExecStartPre=-/bin/mkdir -p /run/openvpn
+ExecStart=/usr/sbin/openvpn --daemon ovpn-%i --status /run/openvpn/%i.status 10 --cd /etc/openvpn --config /etc/openvpn/%i.conf
+ExecReload=/bin/kill -HUP $MAINPID
+WorkingDirectory=/etc/openvpn
+
+[Install]
+WantedBy=multi-user.target

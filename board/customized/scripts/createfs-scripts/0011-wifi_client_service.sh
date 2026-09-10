@@ -27,11 +27,22 @@ if [[ ! -z "${WIFI_AP_WLAN_NAME}" ]]; then
 fi
 
 ## enable wlan1 services if WIFI_CLIENT=ON
+##
+## Removing the links is not enough to disable them: preset-all runs after the
+## post-build scripts and recreates every link it finds an [Install] section for.
+## wpa_supplicant_wlan1.service and dhclient_wlan1.service therefore carry
+## ConditionPathExists=/etc/wpa_supplicant_wlan1.conf, and deleting that config
+## is what actually keeps wlan1 from associating and installing a default route.
 if [[ "${WIFI_CLIENT}" == "ON" ]]; then
 	create_dir ${FULL_PATH}
 	create_link "../wpa_supplicant_wlan1.service" "${FULL_PATH}/wpa_supplicant_wlan1.service"
 	create_link "../dhclient_wlan1.service" "${FULL_PATH}/dhclient_wlan1.service"
 	print_green "INFO: wlan1 client services enabled"
+else
+	delete_file_silent ${TARGET_DIR}/etc/wpa_supplicant_wlan1.conf
+	delete_file_silent ${FULL_PATH}/wpa_supplicant_wlan1.service
+	delete_file_silent ${FULL_PATH}/dhclient_wlan1.service
+	print_green "INFO: WIFI_CLIENT is OFF, wpa_supplicant_wlan1.conf removed"
 fi
 
 ## patch wpa_supplicant_wlan1.conf with SSID and PSK
