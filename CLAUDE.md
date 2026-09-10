@@ -100,6 +100,7 @@ These are consumed by the createfs post-build scripts:
 - `SSH_KEY_FILES_LIST` — authorized SSH public keys
 - `USB_GADGET_DEVICE`, `USB_RNDIS` — USB gadget config
 - `WIFI_CLIENT`, `WLAN_SSID`, `WLAN_PSK` — WiFi client config
+- `QUECTEL_ECM` — install the udev hook that switches a plugged Quectel modem to ECM
 
 ## Claude Code Skills
 

@@ -1,0 +1,7 @@
+# Quectel modems (VID 2c7c): make sure the USB network function comes up as ECM
+# (AT+QCFG="usbnet",1) and not RNDIS, which we have no host driver for.
+#
+# Matched on the parent USB device so it fires once per plug-in instead of once
+# per serial interface. The switch itself runs as a systemd oneshot, because the
+# modem has to be reset afterwards and udev must not be blocked that long.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm.service"

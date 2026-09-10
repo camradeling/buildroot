@@ -36,6 +36,7 @@ AIC8800_MODULE_MAKE_OPTS += CONFIG_AIC_BTUSB_SUPPORT=m
 endif
 
 define AIC8800_INSTALL_FIRMWARE
+	mkdir -p $(TARGET_DIR)/lib/firmware/
 	cp -a $(@D)/src/USB/driver_fw/fw/* \
 		$(TARGET_DIR)/lib/firmware/
 endef

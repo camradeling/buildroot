@@ -1,0 +1,7 @@
+[Unit]
+Description=Switch Quectel modem to ECM mode
+# Started on demand by udev (99-quectel-ecm.rules), not enabled at boot
+
+[Service]
+Type=oneshot
+ExecStart=/etc/scripts/quectel_ecm.sh

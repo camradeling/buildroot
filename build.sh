@@ -23,6 +23,7 @@ usage() {
     echo "Examples:"
     echo "  $0 orangepi3"
     echo "  $0 orangepi orangepi3"
+    echo "  $0 testbot4"
     echo "  $0 orangepi3 board/customized/orangepi/orangepi3-test.vars"
     echo "  $0 orangepi3 menuconfig"
     exit 1
