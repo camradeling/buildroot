@@ -4,4 +4,4 @@ Description=Switch Quectel modem to ECM mode
 
 [Service]
 Type=oneshot
-ExecStart=/etc/scripts/quectel_ecm.sh
+ExecStart=/usr/libexec/quectel/quectel_ecm.sh

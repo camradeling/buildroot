@@ -10,18 +10,35 @@ FILES="etc/udev/rules.d/99-quectel-ecm.rules
 etc/udev/rules.d/79-quectel-ecm-name.rules
 etc/systemd/system/quectel-ecm.service
 etc/systemd/system/quectel-ecm-up.service
-etc/scripts/quectel_ecm.sh
+usr/libexec/quectel/quectel_ecm.sh"
+
+## the mode-switch script is executed, everything else is config
+EXECUTABLES="usr/libexec/quectel/quectel_ecm.sh"
+
+## Paths this option used to install, deleted unconditionally - ON or OFF - because
+## output/target/ is not wiped between builds, so a file dropped from FILES stays
+## in the image forever otherwise. Every one of these is actively harmful now:
+##
+##   etc/scripts/quectel_ecm.sh      rc.local runs /etc/scripts/*.sh at boot, and a
+##   etc/scripts/quectel_ecm_up.sh   stale copy would burn the 20s port-wait loop
+##                                   on every modem-less boot - the exact stall
+##                                   moving the script to /usr/libexec fixes
+##   etc/network/interfaces.d/wwan0  ifupdown would fight the dhclient that
+##                                   quectel-ecm-up.service now owns
+##   etc/dhclient-exit-hooks         would re-add the metric-700 route by hand,
+##                                   overriding /etc/iface-metrics
+STALE="etc/scripts/quectel_ecm.sh
 etc/scripts/quectel_ecm_up.sh
 etc/network/interfaces.d/wwan0
 etc/dhclient-exit-hooks"
 
-## the two scripts are executed, everything else is config
-EXECUTABLES="etc/scripts/quectel_ecm.sh
-etc/scripts/quectel_ecm_up.sh"
-
 ## start
 sed -i -E "s/export QUECTEL_ECM=.*/export QUECTEL_ECM=${QUECTEL_ECM:-OFF}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "QUECTEL_ECM=${QUECTEL_ECM:-OFF}"
+
+for f in ${STALE}; do
+	delete_file_silent ${TARGET_DIR}/${f}
+done
 
 ## Nothing is installed unless the option is on. The files are removed as well,
 ## so switching the option off and rebuilding leaves a clean image.
@@ -53,11 +70,8 @@ for f in ${EXECUTABLES}; do
 	set_chmod 0755 ${TARGET_DIR}/${f}
 done
 
-## wwan0 is configured from /etc/network/interfaces.d, which is only read if the
-## generated /etc/network/interfaces sources it (see 0002-netconfig.sh)
-if ! grep -q "source-directory /etc/network/interfaces.d" ${TARGET_DIR}/etc/network/interfaces; then
-	print_red "ERROR: /etc/network/interfaces does not source /etc/network/interfaces.d, wwan0 would be ignored"
-	exit 1
-fi
+## wwan0 no longer goes through ifupdown at all - quectel-ecm-up.service runs
+## dhclient directly - so there is nothing to check about
+## /etc/network/interfaces here any more.
 
 exit 0
