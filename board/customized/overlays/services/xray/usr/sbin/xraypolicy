@@ -1,0 +1,239 @@
+#!/bin/sh
+# TPROXY policy for the Xray uplink: everything forwarded from a LAN interface is
+# handed to the local Xray client, the box's own traffic is not.
+#
+#   -t mangle -A PREROUTING -i <lan iface> -j XRAY
+#
+# PREROUTING only, never OUTPUT. That is the whole safety argument of this shape:
+# locally generated packets - an SSH reply on usb0, dhclient on wwan0, Xray's own
+# connection to the server - never enter PREROUTING, so they cannot be marked,
+# cannot be sent to table 100, and cannot be proxied by the proxy they belong to.
+# There is no owner/cgroup match to get wrong and no way to lock the box out of
+# its own management interface.
+#
+# Keyed on the LAN interface name for the same reason netpolicy is keyed on the
+# LAN subnet: iptables evaluates -i at packet time, so the rules can be installed
+# before any interface exists, they are inert while the AP or the USB gadget is
+# down, and restarting hostapd or re-plugging the gadget cannot disturb them. No
+# uplink appears anywhere in the set - there is no list to keep in sync.
+#
+# Called by xray.service:
+#   ExecStartPost=/usr/sbin/xraypolicy add
+#   ExecStopPost=/usr/sbin/xraypolicy del     (runs on every exit path)
+# and by netpolicy at boot:
+#   /usr/sbin/xraypolicy killswitch           (no-op unless XRAY_KILLSWITCH=ON)
+#
+# Usage: xraypolicy add|del|killswitch
+
+set -u
+
+. /etc/system.vars
+
+CHAIN=XRAY
+KILL_CHAIN=XRAYKILL
+TABLE=100
+MARK=0x1
+PORT=${XRAY_TPROXY_PORT:-12345}
+IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
+KILLSWITCH=${XRAY_KILLSWITCH:-OFF}
+
+IPT="iptables -t mangle"
+
+log()
+{
+	logger -t xraypolicy "$*"
+}
+
+## Policy routing is the one part of this that busybox cannot do. Its ip applet
+## has no "rule" command and - the reason this check exists at all - it silently
+## ignores "table 100" on a route add, so "ip route add local default dev lo
+## table 100" installs a black-hole default route in the *main* table instead.
+## That was measured on this board: it took the box off the network until the
+## route was deleted by hand. iproute2 is in the defconfig; refuse to run without
+## it rather than break routing.
+require_iproute2()
+{
+	if ip -V 2>/dev/null | grep -q iproute2; then
+		return 0
+	fi
+	log "ERROR: ip is not iproute2 (busybox applet?), refusing to touch policy routing"
+	return 1
+}
+
+#####################################################################
+## the mangle rule set
+#####################################################################
+build_chain()
+{
+	## -N once, then -F: re-running add must not append a second copy of
+	## everything, and flushing is simpler than testing nine rules
+	${IPT} -N ${CHAIN} 2>/dev/null
+	${IPT} -F ${CHAIN}
+
+	## The box itself. --dst-type LOCAL covers every address on every interface,
+	## including the ones that appear later, which is what keeps the SSH session
+	## on usb0 alive.
+	${IPT} -A ${CHAIN} -m addrtype --dst-type LOCAL -j RETURN
+	${IPT} -A ${CHAIN} -d 127.0.0.0/8 -j RETURN
+	## LAN-to-LAN traffic, and the modem's own 192.168.43.0/24. A LAN client
+	## therefore cannot reach an RFC1918 address *behind* the server either - if
+	## the server ever becomes a site-to-site peer rather than an exit node, those
+	## subnets need an explicit jump ahead of these RETURNs.
+	${IPT} -A ${CHAIN} -d 10.0.0.0/8 -j RETURN
+	${IPT} -A ${CHAIN} -d 172.16.0.0/12 -j RETURN
+	${IPT} -A ${CHAIN} -d 192.168.0.0/16 -j RETURN
+	${IPT} -A ${CHAIN} -d 224.0.0.0/4 -j RETURN
+	${IPT} -A ${CHAIN} -d 255.255.255.255/32 -j RETURN
+
+	## Everything else goes to the dokodemo-door inbound. TPROXY sets the fwmark
+	## itself, which is what the ip rule below matches on.
+	${IPT} -A ${CHAIN} -p tcp -j TPROXY --on-port ${PORT} --tproxy-mark ${MARK}
+	${IPT} -A ${CHAIN} -p udp -j TPROXY --on-port ${PORT} --tproxy-mark ${MARK}
+}
+
+hook_chain()
+{
+	for _i in ${IFACES}; do
+		if ${IPT} -C PREROUTING -i "${_i}" -j ${CHAIN} 2>/dev/null; then
+			continue
+		fi
+		${IPT} -A PREROUTING -i "${_i}" -j ${CHAIN}
+	done
+}
+
+unhook_chain()
+{
+	for _i in ${IFACES}; do
+		while ${IPT} -C PREROUTING -i "${_i}" -j ${CHAIN} 2>/dev/null; do
+			${IPT} -D PREROUTING -i "${_i}" -j ${CHAIN} || break
+		done
+	done
+	${IPT} -F ${CHAIN} 2>/dev/null
+	${IPT} -X ${CHAIN} 2>/dev/null
+}
+
+#####################################################################
+## policy routing: marked packets are delivered locally
+#####################################################################
+route_add()
+{
+	if ! ip rule show | grep -q "fwmark ${MARK} lookup ${TABLE}"; then
+		ip rule add fwmark ${MARK} lookup ${TABLE} || return 1
+	fi
+	## "local" is what makes the kernel accept a packet addressed to someone else
+	## on lo, which is how a TPROXY'd packet reaches the listening socket.
+	## replace, not add, so a leftover route is corrected instead of duplicated.
+	ip route replace local default dev lo table ${TABLE}
+}
+
+route_del()
+{
+	while ip rule show | grep -q "fwmark ${MARK} lookup ${TABLE}"; do
+		ip rule del fwmark ${MARK} lookup ${TABLE} 2>/dev/null || break
+	done
+	ip route flush table ${TABLE} 2>/dev/null
+}
+
+#####################################################################
+## conntrack
+#####################################################################
+## Dropping the established flows is what makes LAN clients repath the moment the
+## tunnel appears or disappears, instead of whenever their connections happen to
+## end.
+##
+## Wrapped, because conntrack-tools 1.4.7 does not fail gracefully when the kernel
+## has no NETLINK_NETFILTER: it prints "mnl_socket_open: Protocol not supported"
+## and then segfaults. That is fixed in the kernel config (CONFIG_NF_CT_NETLINK),
+## and this is what keeps a kernel rebuilt without it from dumping a core on every
+## xray restart - it happened, four cores per restart cycle.
+##
+## The "; exit $?" is load-bearing: given a single command the shell execs it
+## rather than forking, and the "Segmentation fault (core dumped)" notice for a
+## crashing child is printed by the *parent* shell, whose stderr is not the one
+## redirected here. With two commands the inner shell forks, so its notice goes to
+## /dev/null with everything else.
+flush_conntrack()
+{
+	if sh -c 'conntrack -F; exit $?' > /dev/null 2>&1; then
+		return 0
+	fi
+	log "WARNING: conntrack -F failed, so existing flows keep their old path until they end"
+}
+
+#####################################################################
+## kill switch (XRAY_KILLSWITCH=ON): no tunnel, no forwarding
+#####################################################################
+## Default OFF, because locking the LAN out of the network on a box that is
+## reached *through* that LAN is a worse first failure than a leak. With it ON,
+## the LAN can still talk to the box and to the other LAN - only the way out is
+## closed, and only while Xray is not running.
+killswitch_add()
+{
+	[ "${KILLSWITCH}" = "ON" ] || return 0
+	## A kill switch with no Xray to wait for is just a broken LAN: nothing would
+	## ever take these rules out again.
+	[ "${XRAY_CLIENT:-OFF}" = "ON" ] || return 0
+
+	iptables -N ${KILL_CHAIN} 2>/dev/null
+	iptables -F ${KILL_CHAIN}
+	for _i in ${IFACES}; do
+		iptables -A ${KILL_CHAIN} -o "${_i}" -j RETURN
+	done
+	iptables -A ${KILL_CHAIN} -j REJECT --reject-with icmp-port-unreachable
+
+	for _i in ${IFACES}; do
+		if iptables -C FORWARD -i "${_i}" -j ${KILL_CHAIN} 2>/dev/null; then
+			continue
+		fi
+		iptables -I FORWARD -i "${_i}" -j ${KILL_CHAIN}
+	done
+	log "kill switch on: ${IFACES} cannot leave this box while Xray is down"
+}
+
+killswitch_del()
+{
+	for _i in ${IFACES}; do
+		while iptables -C FORWARD -i "${_i}" -j ${KILL_CHAIN} 2>/dev/null; do
+			iptables -D FORWARD -i "${_i}" -j ${KILL_CHAIN} || break
+		done
+	done
+	iptables -F ${KILL_CHAIN} 2>/dev/null
+	iptables -X ${KILL_CHAIN} 2>/dev/null
+}
+
+#####################################################################
+case "${1:-}" in
+add)
+	require_iproute2 || exit 1
+	build_chain || exit 1
+	route_add || exit 1
+	hook_chain || exit 1
+	## The tunnel just came up: drop the flows that were established while
+	## traffic went out directly.
+	flush_conntrack
+	## Last, so there is no moment with neither the tunnel nor the kill switch.
+	killswitch_del
+	log "LAN (${IFACES}) is TPROXY'd to 127.0.0.1:${PORT} via fwmark ${MARK}/table ${TABLE}"
+	;;
+del)
+	## Fail-open: the rules go out and the LAN falls back to direct NAT via
+	## netpolicy - unless XRAY_KILLSWITCH=ON, in which case the way out closes.
+	killswitch_add
+	unhook_chain
+	route_del
+	flush_conntrack
+	log "TPROXY policy removed"
+	;;
+killswitch)
+	## Called by netpolicy at boot, before anything can be forwarded: with the
+	## kill switch on, the LAN must not have a direct window between boot and
+	## Xray being up.
+	killswitch_add
+	;;
+*)
+	echo "usage: $(basename "$0") add|del|killswitch" >&2
+	exit 1
+	;;
+esac
+
+exit 0
