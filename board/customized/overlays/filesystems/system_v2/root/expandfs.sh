@@ -170,25 +170,67 @@ fi
 ## e2fsck exit codes are a bitmask: 1 = errors corrected, 2 = corrected and a
 ## reboot is advised, 4 = errors left uncorrected, 8 = operational error.
 ## Anything from 4 up means the filesystem is not in a state to be resized.
-log "checking ${DEV} before the resize"
-e2fsck -f -y "${DEV}"
-RC=$?
-if [[ ${RC} -ge 4 ]]; then
-	die "e2fsck returned ${RC} on ${DEV}, refusing to resize a filesystem it could not repair"
-fi
-log "e2fsck returned ${RC}"
+fsck_or_die()
+{
+	local what=$1
+	log "checking ${DEV} ${what}"
+	e2fsck -f -y "${DEV}"
+	local rc=$?
+	if [[ ${rc} -ge 4 ]]; then
+		die "e2fsck returned ${rc} on ${DEV} ${what}, refusing to go on"
+	fi
+	log "e2fsck returned ${rc}"
+}
+
+fsck_or_die "before the resize"
 
 log "resizing the filesystem on ${DEV} to fill the partition"
 if ! resize2fs "${DEV}"; then
-	die "resize2fs failed on ${DEV}; the next boot will retry"
+	## How far a filesystem can grow is fixed when it is created: the resize
+	## inode reserves GDT blocks for a target size, and mke2fs defaults that
+	## target to 1024x the initial size - 100 GiB for the 100M data filesystem
+	## the image ships. A 119 GiB card is just past it, and resize2fs reports
+	## that as "Illegal doubly indirect block found while trying to resize",
+	## which names neither the limit nor the fix.
+	##
+	## Images built after this went in reserve for 4 TiB (data.cfg), so the
+	## first resize succeeds there and none of this runs. It exists for the
+	## boards that already have a filesystem created by an older image: an OTA
+	## update replaces the rootfs and keeps the data partition, so they can
+	## never get the mke2fs fix, and without a fallback they stay 100M forever.
+	##
+	## Dropping the resize inode is what makes room: an offline resize2fs does
+	## not need it - it rebuilds the group descriptor table itself - and what is
+	## lost is the ability to grow this filesystem *online* later, which is not
+	## something we ever do to a partition that now covers the whole card.
+	FEATURES=$(dumpe2fs -h "${DEV}" 2>/dev/null | sed -n 's/^Filesystem features: *//p')
+	case " ${FEATURES} " in
+	*" resize_inode "*)
+		log "resize2fs failed; retrying without the resize inode"
+		;;
+	*)
+		die "resize2fs failed on ${DEV} and it has no resize inode," \
+			"so the reserve is not the reason; the next boot will retry"
+		;;
+	esac
+
+	## in this order, and every step checked: the failed resize leaves the
+	## filesystem needing a repair, tune2fs refuses to be the one to do it, and
+	## resize2fs then refuses to run on what tune2fs just changed until it has
+	## been checked again.
+	fsck_or_die "after the aborted resize"
+	if ! tune2fs -O ^resize_inode "${DEV}"; then
+		die "tune2fs could not remove the resize inode from ${DEV};" \
+			"the filesystem is checked and intact, the next boot will retry"
+	fi
+	fsck_or_die "after removing the resize inode"
+	if ! resize2fs "${DEV}"; then
+		die "resize2fs failed on ${DEV} even without the resize inode;" \
+			"the next boot will retry"
+	fi
 fi
 
-log "checking ${DEV} after the resize"
-e2fsck -f -y "${DEV}"
-RC=$?
-if [[ ${RC} -ge 4 ]]; then
-	die "e2fsck returned ${RC} after resizing ${DEV}"
-fi
+fsck_or_die "after the resize"
 sync
 
 FS_BLOCKS=$(dumpe2fs -h "${DEV}" 2>/dev/null | sed -n 's/^Block count: *//p')
