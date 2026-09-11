@@ -110,6 +110,14 @@ interface returns its own metric, `eth0` and `eth0:1` do not cross-match, an
 unlisted alias, a missing table and a corrupt value all return 900, and the
 script parses under busybox `ash` as well as bash.
 
+Confirmed end to end on testbot4 (2026-09-11), with the table as the only owner —
+no exit hook, no `wlan1-fix-metric.sh`:
+
+```
+default via 192.168.43.1 dev wwan0  metric 700
+default via 192.168.100.75 dev usb0  metric 2000
+```
+
 ### NAT — keyed on the LAN, not on the uplink (implemented)
 
 One boot-time script, idempotent (`-C || -A`), one rule per LAN subnet:
@@ -177,7 +185,7 @@ through a tunnel, which is right for a road-warrior client but wrong for a
 site-to-site peer that expects the real LAN subnet. The insertion point for a
 `RETURN` on the remote subnets is documented in the script header.
 
-### `wwan0` — fully udev-driven (implemented)
+### `wwan0` — driven by the device unit (implemented)
 
 Replace the ifupdown path with the shape `dhclient_wlan1.service` already uses:
 `Type=simple`, `BindsTo=`/`After=sys-subsystem-net-devices-wwan0.device`,
@@ -186,11 +194,18 @@ Replace the ifupdown path with the shape `dhclient_wlan1.service` already uses:
 which is the one thing ifupdown cannot do here — and it removes the stale
 `/run/network/ifstate` workaround. Deletes `interfaces.d/wwan0`.
 
-Field testing on testbot4 (2026-09-10) turned this from a tidy-up into the fix
-for two real outages — see "Field findings: the wwan0 bring-up path" below. The
-short version: a `Type=oneshot` + `ENV{SYSTEMD_WANTS}` design cannot keep a DHCP
-client running on a modem that re-enumerates, for two independent reasons, and
-the `Type=simple` + `BindsTo` + `Restart=always` shape removes both.
+What *starts* it is `[Install] WantedBy=sys-subsystem-net-devices-wwan0.device`,
+not udev. The net-device udev rule that used to do it is deleted: it never worked,
+because renaming the interface makes the kernel emit a second `ACTION=move` uevent
+and udev rewrites the device's database entry without the `SYSTEMD_WANTS` the
+`ACTION=="add"` rule had set. The `.wants` link on the device unit is the
+level-triggered form of the same intent and survives anything that touches the
+device's properties. `99-quectel-ecm.rules` keeps only the USB-parent rule for the
+mode switch, which has no device unit to hang off.
+
+Field testing on testbot4 (2026-09-10, again 2026-09-11) turned this from a
+tidy-up into the fix for three real outages — see "Field findings: the wwan0
+bring-up path" below.
 
 ### `/etc/scripts/` hygiene (implemented)
 
@@ -354,35 +369,55 @@ there was no client left to renew an 11-hour lease, so the link would have gone
 quietly dead. `KillMode=process` added as a stopgap; Phase 1 removes the need for
 it, because there the client *is* the main process.
 
-### 4. `ENV{SYSTEMD_WANTS}` does not re-fire on re-enumeration (Phase 1)
+### 4. `ENV{SYSTEMD_WANTS}` never reached the device at all (fixed)
 
-After `AT+CFUN=1,1` the USB-parent rule worked fine — `quectel-ecm.service` ran
-and rebound the data call. But the **net** rule's
-`ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"` produced no job at all, so `wwan0`
-came back as a fresh ifindex, `DOWN`, `qdisc noop`, with no address, while the
-`dhclient` from the previous ifindex was still running. `udevadm trigger
---action=add` did not start it either, and `udevadm test` confirms the rule still
-matches (`SYSTEMD_WANTS=quectel-ecm-up.service`) — so this is not rule matching.
+The net rule's `ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"` produced no job —
+not on a modem reset and, as the 2026-09-11 image showed, not on a cold boot
+either. `wwan0` existed, `UP`-able, with no address, and `dhclient` had never run:
 
-The mechanism: `SYSTEMD_WANTS` only creates a job when the device unit
-*transitions* into active. `sys-subsystem-net-devices-wwan0.device` stayed
-`active plugged` across the entire reset — systemd logged no state change for it
-whatsoever — so the `Wants=` was already satisfied and nothing started.
+```
+# systemctl is-active quectel-ecm-up.service        -> inactive (NRestarts=0)
+# systemctl is-active sys-subsystem-net-devices-wwan0.device -> active
+# systemctl show sys-subsystem-net-devices-wwan0.device -p Wants
+Wants=
+```
 
-This is not fixable by tuning the rule: udev-triggered oneshots are inherently
-edge-triggered on a device unit whose edges we do not control. The Phase 1 shape
-is level-triggered instead — `BindsTo=`/`After=sys-subsystem-net-devices-wwan0.device`
-makes systemd own the client's lifetime, and `Restart=always` recovers from a
-link that drops out from under `dhclient` (which is exactly what
-`receive_packet failed on wwan0: Network is down` in the journal was).
+`udevadm test /sys/class/net/wwan0` prints `SYSTEMD_WANTS=quectel-ecm-up.service`,
+so the rule matches — but the property was not in the device's database:
 
-Phase 1 has since landed, so the manual `systemctl start quectel-ecm-up.service`
-after a modem reset should no longer be needed: the unit is `Type=simple` with
-`dhclient -d` as the main process, `BindsTo=`/`After=` the `wwan0` device unit and
-`Restart=always`, so the udev rule only has to fire once — recovery is systemd
-restarting a client that died, not udev re-triggering a oneshot. The udev rules
-themselves are unchanged apart from comments. **Not yet re-tested against a live
-`AT+CFUN=1,1`.**
+```
+# grep SYSTEMD /run/udev/data/n3
+E:SYSTEMD_ALIAS=/sys/subsystem/net/devices/wwan0     <- and nothing else
+```
+
+The mechanism is the rename. `79-quectel-ecm-name.rules` applies `NAME="wwan0"`,
+the kernel emits a second uevent for it (`ACTION=move`, visible in dmesg as
+`cdc_ether 1-1:1.0 wwan0: renamed from usb0`), udev re-runs the rules for it, the
+`ACTION=="add"` rule does not match, and the database entry is rewritten *without*
+`SYSTEMD_WANTS`. `udevadm trigger --action=add /sys/class/net/wwan0` puts the
+property back, starts the unit and brings the uplink up on the spot — which is what
+pinned the mechanism down, and also corrects an earlier reading of this same
+symptom recorded here (that the device unit "stayed active plugged across the
+reset", and that a synthetic `add` did not help — neither holds).
+
+An `AT+CFUN=1,1` on the fixed-by-hand board then showed the second half:
+
+```
+15:55:22 usb 1-1: USB disconnect            -> BindsTo stopped the unit cleanly,
+15:55:22 Stopped DHCP client for ... wwan0      no orphan dhclient, routes gone
+15:55:31 cdc_ether 1-1:1.0 wwan0: renamed from usb1
+15:55:31 Finished Switch Quectel modem to ECM mode
+         ... and nothing started quectel-ecm-up.service
+```
+
+`Restart=always` cannot cover that: the unit was *stopped* by `BindsTo`, not
+failed. So the fix is `[Install] WantedBy=sys-subsystem-net-devices-wwan0.device`
+and deleting the net udev rule. A `.wants` link on the device unit is
+level-triggered by construction — systemd starts the unit every time the device
+unit activates, on the first boot and on every re-enumeration, with no property to
+lose. `after-preset-check.sh` rule F fails the build if `preset-all` ever stops
+creating that link, since an image without it boots, switches the modem to ECM and
+leaves `wwan0` addressless — a failure with no error message anywhere.
 
 ## Does any of this need a watcher?
 
