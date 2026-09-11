@@ -14,9 +14,10 @@
 # Rules A-C below check that this design is actually in force, so that a newly
 # added unit cannot silently start shipping enabled - which is how
 # openvpn@server.service and wpa_supplicant_wlan1.service ended up running on
-# images built with VPN_CLIENT=OFF / WIFI_CLIENT=OFF. Rules D and E cover the
-# other way a config can rot: files that used to be installed and no longer
-# should be, and files that have to be present for something to have one owner.
+# images built with VPN_CLIENT=OFF / WIFI_CLIENT=OFF. Rules D to F cover the other
+# ways a config can rot: files that used to be installed and no longer should be,
+# files that have to be present for something to have one owner, and a unit that
+# is enabled somewhere other than multi-user.target.wants.
 #
 # Runs once per filesystem type (ext2 and tar here), on a throwaway copy of
 # target/ that is deleted afterwards, so it must stay read-only - it is.
@@ -64,9 +65,11 @@ systemd-networkd.service"
 ## and each gated unit's Condition*Exists= must point at one of the artifacts,
 ## so a typo on either side is caught instead of silently disabling a feature.
 ##
-## QUECTEL_ECM has no entry in a .wants dir at all - quectel-ecm.service and
-## quectel-ecm-up.service are started by udev via SYSTEMD_WANTS and have no
-## [Install] section, so preset-all does not touch them.
+## QUECTEL_ECM has no entry in multi-user.target.wants: quectel-ecm.service is
+## started by udev via SYSTEMD_WANTS and has no [Install] section at all, and
+## quectel-ecm-up.service is WantedBy= the wwan0 device unit, so preset-all puts
+## its link in sys-subsystem-net-devices-wwan0.device.wants instead. Rule F below
+## is what checks that link, since it is the only thing that brings the uplink up.
 
 # shellcheck source=/dev/null
 if [[ ! -f "${VARS_FILE}" ]]; then
@@ -245,6 +248,22 @@ for path in /etc/iface-metrics /usr/sbin/iface-metric; do
 			"fallback metric instead of the one the table specifies"
 	fi
 done
+
+## F. With QUECTEL_ECM=ON, the one thing that starts the DHCP client on the
+## modem's uplink is a .wants link on the wwan0 device unit, created by preset-all
+## from the unit's [Install] section. If preset-all ever stops creating it - a
+## typo in WantedBy=, a preset that disables the unit - the image still boots, the
+## modem still switches to ECM, and wwan0 just sits there with no address, which
+## is exactly the failure this replaced and it took a live board to spot. So check
+## the link, not the [Install] line.
+if [[ "${QUECTEL_ECM:-OFF}" == "ON" ]]; then
+	QECM_WANTS="${TARGET_DIR}/etc/systemd/system/sys-subsystem-net-devices-wwan0.device.wants/quectel-ecm-up.service"
+	if [[ ! -L "${QECM_WANTS}" ]]; then
+		fail "QUECTEL_ECM=ON but quectel-ecm-up.service is not linked into" \
+			"sys-subsystem-net-devices-wwan0.device.wants, so nothing would" \
+			"start dhclient when wwan0 appears"
+	fi
+fi
 
 if [[ ${RC} -eq 0 ]]; then
 	print_green "INFO: after-preset-check: systemd unit gating matches ${VARS_FILE}"
