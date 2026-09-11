@@ -10,10 +10,14 @@ FILES="etc/udev/rules.d/99-quectel-ecm.rules
 etc/udev/rules.d/79-quectel-ecm-name.rules
 etc/systemd/system/quectel-ecm.service
 etc/systemd/system/quectel-ecm-up.service
-usr/libexec/quectel/quectel_ecm.sh"
+etc/systemd/system/modem-time.service
+usr/libexec/quectel/quectel_at.inc
+usr/libexec/quectel/quectel_ecm.sh
+usr/sbin/modem-time"
 
-## the mode-switch script is executed, everything else is config
-EXECUTABLES="usr/libexec/quectel/quectel_ecm.sh"
+## the two scripts are executed, everything else is config or a sourced library
+EXECUTABLES="usr/libexec/quectel/quectel_ecm.sh
+usr/sbin/modem-time"
 
 ## Paths this option used to install, deleted unconditionally - ON or OFF - because
 ## output/target/ is not wiped between builds, so a file dropped from FILES stays
