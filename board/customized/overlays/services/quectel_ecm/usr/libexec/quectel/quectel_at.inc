@@ -4,11 +4,30 @@
 # everything else has a working default.
 #
 # Two scripts talk to the same serial port - quectel_ecm.sh on plug-in and
-# modem-time on every wwan0 appearance - so both take LOCK_FILE first. They do
-# it differently on purpose: the mode switch takes it non-blocking and skips its
-# run if it is held, while modem-time waits (see with_modem_lock).
+# modem-time on every wwan0 appearance - so both serialise on AT_LOCK through
+# with_modem_lock, blocking, for as long as they are actually holding the port.
 
 QUECTEL_VID="${QUECTEL_VID:-2c7c}"
+
+# Two locks, and the difference between them is the whole point.
+#
+# AT_LOCK serialises the serial port. Two readers on one ttyUSB get each other's
+# replies, so everything that sends an AT command takes this one and waits for it.
+#
+# LOCK_FILE is a single-instance lock and only quectel_ecm.sh uses it: udev fires
+# once per plug-in and the mode switch re-enumerates the modem, so overlapping runs
+# of the switch have to collapse into one. That one is taken non-blocking.
+#
+# They used to be the same file, and that cost a ten-minute outage on a live board,
+# so this is not a tidiness argument. At boot modem-time won the race by 76ms and
+# held the lock through its first AT round (port discovery, ~9s); quectel_ecm.sh's
+# flock -n gave up 200ms in and exited 0 without a word. Nothing ever asserted
+# AT+QNETDEVCTL, so the modem never bound its data call to the ECM interface -
+# wwan0 appeared, dhclient took a lease from the modem's own DHCP server, the
+# default route was installed, and not one packet reached the carrier. Every check
+# on the box said the uplink was up. It stayed that way until an unrelated
+# re-enumeration let the mode switch run, ten minutes later.
+AT_LOCK="${AT_LOCK:-/run/quectel_at.lock}"
 LOCK_FILE="${LOCK_FILE:-/run/quectel_ecm.lock}"
 AT_OUT="${AT_OUT:-/run/quectel_ecm.at}"
 
@@ -81,20 +100,29 @@ function find_at_port()
 	return 1
 }
 
-# Run "$@" while holding the modem lock, then drop it. Waits up to
-# ${LOCK_WAIT:-30}s: the caller is a poller, and the thing it is most likely
-# waiting for is quectel_ecm.sh resetting the modem, which is worth waiting for.
+# Run "$@" while holding the serial port lock, then drop it. Waits up to
+# ${LOCK_WAIT:-30}s: every caller here is either a poller or a plug-in handler, and
+# what they are waiting for - the other one's AT round - takes seconds and is worth
+# waiting for. Hold it for the shortest run that must not be interleaved, not for a
+# whole poll: modem-time takes it per attempt and drops it between them.
+#
+# fd 8, not 9, so a caller can hold its own single-instance lock on 9 at the same
+# time.
 function with_modem_lock()
 {
 	local rc
 
-	exec 9> ${LOCK_FILE}
-	if ! flock -w ${LOCK_WAIT:-30} 9; then
-		exec 9>&-
-		return 1
+	exec 8> ${AT_LOCK}
+	if ! flock -w ${LOCK_WAIT:-30} 8; then
+		exec 8>&-
+		## Distinct from anything "$@" is likely to return, so a caller can tell
+		## "I never got the port" from "what I ran on it failed" - a modem that is
+		## busy from a modem that is broken. It is the first of those that used to
+		## be silent.
+		return 111
 	fi
 	"$@"
 	rc=$?
-	exec 9>&-
+	exec 8>&-
 	return ${rc}
 }

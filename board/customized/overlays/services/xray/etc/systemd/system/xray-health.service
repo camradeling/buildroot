@@ -14,8 +14,11 @@ ConditionPathExists=/etc/xray/config.json
 [Service]
 Type=oneshot
 ExecStart=/usr/sbin/xray-health
-# The probe is bounded by nc -w 5 and there are no loops, so anything past this is
-# a wedged nc. A hanging health check must not become the outage.
+# Two probes bounded by read -t 5 each and no loops, so anything past this is
+# wedged. A hanging health check must not become the outage - and it did: with the
+# probe built on "nc -w 5" every tick hung here and was killed, which is why the
+# script now records the failure before it probes and escalates from the state file
+# rather than from this tick's result. This timeout is the backstop, not the design.
 TimeoutStartSec=60
 
 # No [Install]: xray-health.timer is the only thing that starts this.
