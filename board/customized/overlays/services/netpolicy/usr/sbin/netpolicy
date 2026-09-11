@@ -1,0 +1,148 @@
+#!/bin/sh
+# Uplink-agnostic NAT for the LAN interfaces.
+#
+# Every subnet behind this board is masqueraded whenever it leaves through
+# anything other than its own interface:
+#
+#   -t nat -A POSTROUTING -s <lan subnet> ! -o <lan iface> -j MASQUERADE
+#
+# Keyed on the LAN, deliberately not on the uplink. iptables evaluates -s and -o
+# at packet time, so one rule per LAN covers every uplink the board will ever
+# have - eth0, wlan1, wwan0, usb0, a tunnel - with no list to keep in sync.
+#
+# The scheme this replaces masqueraded out a single hardcoded
+# ${WIFI_AP_WAN_IFACE:-eth0}, which is exactly why AP clients had no internet
+# once wwan0 became the only live uplink: their packets were forwarded (the
+# FORWARD policy is ACCEPT) and then left un-NATted. An uplink list is the part
+# that goes stale when an interface is added, so there is no list.
+#
+# "! -o <own iface>" keeps LAN-to-LAN traffic alone - an AP client reaching a
+# usb0 client is not rewritten, so the real source stays visible.
+#
+# Installed once at boot by netpolicy.service and never touched again, so
+# restarting hostapd or wpa_supplicant can no longer tear NAT down (it used to:
+# the rules lived in their ExecStartPost/ExecStopPost hooks).
+#
+# ip_forward is still set by rc.local - not moved here, because testbot (Zero)
+# has no AP and does not install this unit.
+#
+# Site-to-site VPN: these rules also NAT LAN traffic leaving through a tunnel,
+# which is right for a road-warrior client but wrong for a peer that expects to
+# see the real LAN subnet. If that case turns up, insert a RETURN for the remote
+# subnets ahead of the MASQUERADE rules:
+#   iptables -t nat -I POSTROUTING -s <lan> -d <remote lan> -j RETURN
+
+set -u
+
+. /etc/system.vars
+
+# USB_ADDR lives here rather than in system.vars, and only exists when the
+# usb_gadget overlay is installed
+if [ -f /etc/profile.d/usbaddr.sh ]; then
+	. /etc/profile.d/usbaddr.sh
+fi
+
+log()
+{
+	logger -t netpolicy "$*"
+}
+
+## "192.168.3.1" "255.255.255.0" -> "192.168.3.0/24"
+## There is no ipcalc in this image (busybox is built without it), so do the
+## arithmetic here. Only contiguous netmasks are accepted.
+subnet_of()
+{
+	_addr=$1
+	_mask=$2
+	_oldifs=$IFS
+
+	IFS=.
+	set -- ${_addr}
+	if [ $# -ne 4 ]; then
+		IFS=${_oldifs}
+		return 1
+	fi
+	_a1=$1 _a2=$2 _a3=$3 _a4=$4
+	set -- ${_mask}
+	if [ $# -ne 4 ]; then
+		IFS=${_oldifs}
+		return 1
+	fi
+	_m1=$1 _m2=$2 _m3=$3 _m4=$4
+	IFS=${_oldifs}
+
+	## _done goes to 1 at the first octet that is not 255; everything after it
+	## has to be 0, which is what makes the mask contiguous
+	_prefix=0
+	_done=0
+	for _o in ${_m1} ${_m2} ${_m3} ${_m4}; do
+		if [ ${_done} -eq 1 ] && [ "${_o}" != "0" ]; then
+			return 1
+		fi
+		case ${_o} in
+		255) _prefix=$((_prefix + 8)) ;;
+		254) _prefix=$((_prefix + 7)) _done=1 ;;
+		252) _prefix=$((_prefix + 6)) _done=1 ;;
+		248) _prefix=$((_prefix + 5)) _done=1 ;;
+		240) _prefix=$((_prefix + 4)) _done=1 ;;
+		224) _prefix=$((_prefix + 3)) _done=1 ;;
+		192) _prefix=$((_prefix + 2)) _done=1 ;;
+		128) _prefix=$((_prefix + 1)) _done=1 ;;
+		0) _done=1 ;;
+		*) return 1 ;;
+		esac
+	done
+
+	echo "$((_a1 & _m1)).$((_a2 & _m2)).$((_a3 & _m3)).$((_a4 & _m4))/${_prefix}"
+}
+
+## -C tells us whether the rule is already there, so the unit survives a restart
+## without duplicating anything
+add_rule()
+{
+	if iptables -t nat -C POSTROUTING "$@" 2>/dev/null; then
+		return 0
+	fi
+	iptables -t nat -A POSTROUTING "$@"
+}
+
+nat_lan()
+{
+	_iface=$1
+	_addr=$2
+	_mask=$3
+	_subnet=""
+
+	## No feature gating on purpose: with the AP or the USB gadget off the
+	## interface has no address, so nothing can carry that source and the rule
+	## is inert. It also means enabling a feature at runtime cannot leave NAT
+	## missing.
+	if [ -z "${_addr}" ]; then
+		log "no address configured for ${_iface}, no NAT rule for it"
+		return 0
+	fi
+
+	_subnet=$(subnet_of "${_addr}" "${_mask}")
+	if [ -z "${_subnet}" ]; then
+		log "ERROR: cannot derive a subnet from ${_addr} netmask ${_mask} (${_iface})"
+		return 1
+	fi
+
+	if add_rule -s "${_subnet}" ! -o "${_iface}" -j MASQUERADE; then
+		log "NAT ${_subnet} out of anything but ${_iface}"
+		return 0
+	fi
+
+	log "ERROR: could not install the MASQUERADE rule for ${_subnet}"
+	return 1
+}
+
+RC=0
+
+nat_lan "${WIFI_AP_WLAN_NAME:-wlan0}" "${WIFI_AP_ADDR:-}" "${WIFI_AP_NETMASK:-255.255.255.0}" || RC=1
+
+## usbstart.sh brings the gadget up with "ifconfig usb0 ${USB_ADDR}" and no
+## netmask, which gives the class-C default
+nat_lan usb0 "${USB_ADDR:-}" 255.255.255.0 || RC=1
+
+exit ${RC}

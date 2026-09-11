@@ -43,11 +43,14 @@ Three separate problems:
 ## Key Insight
 
 Nothing needs to discover "the current default gateway". The kernel already
-sends forwarded packets to the lowest-metric default route, and
-`iptables -t nat -A POSTROUTING -o <iface> -j MASQUERADE` only fires for packets
-that actually egress `<iface>`. So a rule per *candidate* uplink, all installed
-once at boot, is automatically "NAT out whatever the default route happens to
-be". No watcher, no daemon, no `WIFI_AP_WAN_IFACE`.
+sends forwarded packets to the lowest-metric default route, and an `iptables`
+`POSTROUTING` rule is only consulted for packets that are actually leaving. So
+rules installed once at boot are automatically "NAT out whatever the default
+route happens to be". No watcher, no daemon, no `WIFI_AP_WAN_IFACE`.
+
+The rule set is keyed on the **LAN** the traffic comes from (`-s <lan> ! -o
+<own iface>`), not on the uplink it leaves by — see the NAT section for why the
+original uplink-keyed form was dropped.
 
 That splits cleanly:
 
@@ -88,27 +91,72 @@ falls back to a documented default. Both of its route-installing branches
 
 Deletes `wlan1-fix-metric.sh` and `dhclient-exit-hooks` entirely.
 
-### NAT — static and uplink-agnostic
+### NAT — keyed on the LAN, not on the uplink (implemented)
 
-One boot-time script, idempotent (`-C || -A`), for every non-LAN interface:
+One boot-time script, idempotent (`-C || -A`), one rule per LAN subnet:
 
 ```
--t nat -A POSTROUTING -o eth0   -j MASQUERADE
--t nat -A POSTROUTING -o wlan1  -j MASQUERADE
--t nat -A POSTROUTING -o wwan0  -j MASQUERADE
--t nat -A POSTROUTING -o usb0   -j MASQUERADE
--t nat -A POSTROUTING -o tun+   -j MASQUERADE
--t nat -A POSTROUTING -o tap+   -j MASQUERADE
+-t nat -A POSTROUTING -s 192.168.3.0/24   ! -o wlan0 -j MASQUERADE
+-t nat -A POSTROUTING -s 192.168.100.0/24 ! -o usb0  -j MASQUERADE
 ```
 
-`iptables` matches `-o` by name at packet time, so the interfaces need not exist
-when the rules are installed, and the `+` wildcard covers VPN interfaces without
-knowing their names. Rules survive hostapd/wpa_supplicant/modem restarts.
+Verified live on testbot4 (2026-09-10), where the only rule in the table was
+`-o eth0 -j MASQUERADE` and `eth0` had no carrier: `ping -I 192.168.3.1 8.8.8.8`
+was 100% loss and `ping -I wwan0 8.8.8.8` 0%. Adding the two rules by hand took
+the LAN-sourced ping to 0% loss and made DNS resolve from a LAN source address;
+they were then removed to leave the board as found.
 
-`wlan0-ap-setup.sh` and `wlan1-client-setup.sh` lose their `iptables` blocks and
-keep only the AP address assignment. The existing `FORWARD` rules are dropped:
-the `FORWARD` policy is `ACCEPT`, so they gate nothing. A real firewall (policy
-`DROP` + stateful rules over the same interface set) is a separate decision.
+**This replaces the uplink-keyed set this plan originally specified** (one
+`-o <uplink> -j MASQUERADE` per candidate uplink). Both are uplink-agnostic in
+the sense that matching happens at packet time, but the uplink-keyed form still
+carries a *list of uplinks*, and that list is precisely the thing that went
+stale: `wwan0` was added, nobody updated the list, and AP clients lost the
+internet. Keyed on the LAN there is no list to keep in sync — a second modem, a
+tunnel, anything new is covered with zero edits.
+
+Three further advantages:
+
+- Board-originated traffic is untouched. The uplink-keyed form rewrites our own
+  packets too (harmless, but every counter becomes noise).
+- `usb0`'s dual role as LAN *and* last-resort uplink falls out correctly and
+  symmetrically: AP clients egressing `usb0` are NATted to `192.168.100.1`, and
+  `usb0`-side traffic egressing `wwan0` is NATted, with no special case.
+- `! -o <own iface>` leaves LAN↔LAN traffic alone, so an AP client reaching a
+  `usb0` client keeps its real source address.
+
+Implemented as `services/netpolicy/` (`usr/sbin/netpolicy` +
+`netpolicy.service`), a `Type=oneshot` `RemainAfterExit=yes` unit ordered with
+`network-pre.target`. Subnets are derived at runtime from `WIFI_AP_ADDR` /
+`WIFI_AP_NETMASK` in `system.vars` and `USB_ADDR` in
+`/etc/profile.d/usbaddr.sh`; there is no `ipcalc` in the image, so the script
+does the mask arithmetic itself and rejects non-contiguous masks. No feature
+gating: with the AP or gadget off the interface has no address, so nothing can
+carry that source and the rule is inert — which also means enabling a feature at
+runtime cannot leave NAT missing.
+
+Scoped to the two targets that have an AP: the overlay is added to
+`testbot3_defconfig` and `testbot4_defconfig`. `testbot` (Zero) has no
+`hostapd_wlan0`/`dnsmasq_wlan0` overlay, so it is unaffected. `ip_forward`
+therefore stays in `rc.local` rather than moving into the unit — moving it would
+drop forwarding on `testbot`. `netpolicy.service` is always-on with no
+`Condition*=`, so it is added to `ALWAYS_ON` in `after-preset-check.sh`.
+
+`wlan0-ap-setup.sh` loses its `iptables` block and keeps only the AP address
+assignment. `wlan1-client-setup.sh` did nothing else at all, so it is deleted
+along with the `ExecStartPost=`/`ExecStopPost=` hooks in
+`wpa_supplicant_wlan1.service`; `0011` deletes the stale copy from
+`output/target/`, which the overlay rsync would otherwise keep shipping. Having
+the rules in those hooks was itself a bug: `systemctl restart hostapd` removed
+NAT for the whole board.
+
+The existing `FORWARD` rules are dropped: the `FORWARD` policy is `ACCEPT`, so
+they gate nothing while reading like a firewall. A real firewall (policy `DROP` +
+stateful rules) is a separate decision, deliberately not half-done here.
+
+Not addressed, and needing a decision: these rules also NAT LAN traffic leaving
+through a tunnel, which is right for a road-warrior client but wrong for a
+site-to-site peer that expects the real LAN subnet. The insertion point for a
+`RETURN` on the remote subnets is documented in the script header.
 
 ### `wwan0` — fully udev-driven
 
@@ -139,7 +187,7 @@ device is in sysfs, and only waits for `ttyUSB*` once a modem has been found.
 | 0 | `rc.local` blackhole rule removed | `system_v2/etc/rc.local` **(done)** |
 | 1 | Quectel scripts out of `/etc/scripts`, wait loop restructured; `wwan0` to the `BindsTo` + `dhclient -d` shape (drops the `KillMode=process` stopgap) | `services/quectel_ecm/*`, `0012-quectel_ecm_service.sh` |
 | 2 | `/etc/iface-metrics` + `dhclient-script` as sole metric owner; delete `wlan1-fix-metric.sh` and `dhclient-exit-hooks`; `usbstart.sh` reads the table | `system_v2/usr/sbin/dhclient-script`, `system_v2/etc/iface-metrics` (new), `wpa_supplicant_wlan1/*`, `usb_gadget/etc/scripts/usbstart.sh` |
-| 3 | `netpolicy` oneshot unit with the uplink-agnostic NAT set; strip `iptables` from the two setup scripts; retire `WIFI_AP_WAN_IFACE` | new unit + script, `hostapd_wlan0/etc/scripts/wlan0-ap-setup.sh`, `wpa_supplicant_wlan1/etc/scripts/wlan1-client-setup.sh`, `0010`, `system.vars` |
+| 3 | `netpolicy` oneshot unit with the LAN-keyed NAT set; strip `iptables` from the two setup scripts; retire `WIFI_AP_WAN_IFACE` | new `services/netpolicy/{usr/sbin/netpolicy,etc/systemd/system/netpolicy.service}`, `hostapd_wlan0/etc/scripts/wlan0-ap-setup.sh`, `wpa_supplicant_wlan1/etc/scripts/wlan1-client-setup.sh` (deleted), `wpa_supplicant_wlan1.service`, `0010`, `0011`, `after-preset-check.sh`, `system.vars`, `orangepi_new-test.vars`, `testbot3_defconfig`, `testbot4_defconfig` **(done)** |
 | 4 | "OFF means off" — runtime `Condition*=` gating + a post-fakeroot assertion pass | `hostapd.service`, `dnsmasq_wlan0.service`, `dnsmasq_usb0.service`, `wpa_supplicant_wlan1.service`, `dhclient_wlan1.service`, new `openvpn@.service`, `0001`, `0007`, `0008`, `0010`, `0011`, `system.vars`, new `after-preset-check.sh`, `testbot4_defconfig` **(done)** |
 | 5 | *Optional, later:* reachability-based failover watcher; non-OpenVPN protocols | new |
 

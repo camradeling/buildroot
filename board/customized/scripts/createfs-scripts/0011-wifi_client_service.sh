@@ -26,6 +26,11 @@ if [[ ! -z "${WIFI_AP_WLAN_NAME}" ]]; then
 	print_green "WIFI_AP_WLAN_NAME=${WIFI_AP_WLAN_NAME}"
 fi
 
+## wlan1-client-setup.sh was removed when NAT moved to netpolicy.service. Delete
+## it explicitly: output/target/ is not wiped between builds and the overlay rsync
+## has no --delete, so the old copy would keep shipping.
+delete_file_silent ${TARGET_DIR}/etc/scripts/wlan1-client-setup.sh
+
 ## enable wlan1 services if WIFI_CLIENT=ON
 ##
 ## Removing the links is not enough to disable them: preset-all runs after the

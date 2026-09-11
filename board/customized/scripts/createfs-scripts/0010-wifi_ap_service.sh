@@ -11,8 +11,10 @@ sed -i -E "s/export WIFI_AP_ADDR=.*/export WIFI_AP_ADDR=${WIFI_AP_ADDR}/g" ${TAR
 print_green "WIFI_AP_ADDR=${WIFI_AP_ADDR}"
 sed -i -E "s/export WIFI_AP_NETMASK=.*/export WIFI_AP_NETMASK=${WIFI_AP_NETMASK}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "WIFI_AP_NETMASK=${WIFI_AP_NETMASK}"
-sed -i -E "s/export WIFI_AP_WAN_IFACE=.*/export WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
-print_green "WIFI_AP_WAN_IFACE=${WIFI_AP_WAN_IFACE:-eth0}"
+## WIFI_AP_WAN_IFACE is retired: NAT is no longer keyed on a single uplink, it is
+## keyed on the LAN subnet by netpolicy.service. Strip a leftover export from
+## system.vars so nothing on the target can still read it.
+sed -i -E "/^export WIFI_AP_WAN_IFACE=/d" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 
 ## hostapd.service and dnsmasq_wlan0.service are enabled by preset-all no matter
 ## what WIFI_AP says (preset-all runs after the post-build scripts), so the

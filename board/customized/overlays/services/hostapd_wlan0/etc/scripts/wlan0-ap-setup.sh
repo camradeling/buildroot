@@ -1,4 +1,14 @@
 #!/bin/sh
+# Address assignment for the AP interface, run from hostapd.service's
+# ExecStartPost/ExecStopPost.
+#
+# NAT used to live here as well, masquerading out a single hardcoded
+# ${WIFI_AP_WAN_IFACE:-eth0}. That was wrong twice over: AP clients could only
+# reach the internet over that one interface (so they had none once wwan0 was
+# the only live uplink), and tearing the rules down in ExecStopPost meant a
+# plain "systemctl restart hostapd" removed NAT for everything on the board.
+# It is now installed once at boot by netpolicy.service, keyed on the LAN
+# subnet instead of on an uplink. See /usr/sbin/netpolicy.
 . /etc/system.vars
 
 if [ -z "${WIFI_AP}" ] || [ "${WIFI_AP}" = "OFF" ]; then
@@ -6,19 +16,12 @@ if [ -z "${WIFI_AP}" ] || [ "${WIFI_AP}" = "OFF" ]; then
 fi
 
 AP_IFACE="${WIFI_AP_WLAN_NAME:-wlan0}"
-WAN_IFACE="${WIFI_AP_WAN_IFACE:-eth0}"
 
 case "$1" in
     start)
         ifconfig ${AP_IFACE} ${WIFI_AP_ADDR} netmask ${WIFI_AP_NETMASK} up
-        iptables -t nat -A POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
-        iptables -A FORWARD -i ${AP_IFACE} -o ${WAN_IFACE} -j ACCEPT
-        iptables -A FORWARD -i ${WAN_IFACE} -o ${AP_IFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
         ;;
     stop)
-        iptables -t nat -D POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
-        iptables -D FORWARD -i ${AP_IFACE} -o ${WAN_IFACE} -j ACCEPT
-        iptables -D FORWARD -i ${WAN_IFACE} -o ${AP_IFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
         ifconfig ${AP_IFACE} 0.0.0.0 down
         ;;
 esac
