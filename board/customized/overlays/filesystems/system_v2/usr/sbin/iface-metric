@@ -1,0 +1,51 @@
+#!/bin/sh
+# Print the default-route metric for an interface, from /etc/iface-metrics.
+#
+# Usage: iface-metric <iface>        e.g. iface-metric wwan0 -> 700
+#
+# Always prints a usable number and exits 0, so callers can inline it:
+#
+#   route add default gw "${router}" metric "$(/usr/sbin/iface-metric eth0)"
+#
+# A lookup that fails must not produce an empty metric: "route add default gw X
+# metric" with nothing after it is a syntax error, and worse, a bare
+# "route add default gw X" installs metric 0, which outranks every uplink in the
+# table. That is the hole the TIMEOUT branch of dhclient-script used to have.
+#
+# Plain read loop rather than sed/awk: this runs from dhclient-script on every
+# lease event, and /sbin/ip here is a busybox applet, so the fewer assumptions
+# about which real tools exist, the better.
+
+TABLE=/etc/iface-metrics
+
+## Unknown interfaces rank below every uplink named in the table but above usb0,
+## the last-resort one: a new uplink nobody has classified yet should be used in
+## preference to bouncing traffic through the USB host, but should never quietly
+## outrank eth0 or the modem.
+FALLBACK=900
+
+WANT=$1
+if [ -z "${WANT}" ]; then
+	echo "usage: $(basename "$0") <iface>" >&2
+	echo "${FALLBACK}"
+	exit 0
+fi
+
+if [ -r "${TABLE}" ]; then
+	while read -r _iface _metric _rest; do
+		case "${_iface}" in
+		''|\#*) continue ;;
+		esac
+		if [ "${_iface}" = "${WANT}" ]; then
+			## guard against a typo in the table turning into metric 0
+			case "${_metric}" in
+			''|*[!0-9]*) break ;;
+			esac
+			echo "${_metric}"
+			exit 0
+		fi
+	done < "${TABLE}"
+fi
+
+echo "${FALLBACK}"
+exit 0

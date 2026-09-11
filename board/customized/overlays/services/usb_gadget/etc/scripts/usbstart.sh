@@ -66,7 +66,11 @@ if [ ! -z ${USB_RNDIS} ] && [ ${USB_RNDIS} == "ON" ]; then
 	sleep 0.2
 	. /etc/profile.d/usbaddr.sh
 	ifconfig usb0 ${USB_ADDR} up
-	ip route add default via 192.168.100.75 dev usb0 metric 1000
+	# usb0 is both a LAN and the last-resort uplink: if the USB host shares its
+	# connection we can egress through it, but only when nothing else is left.
+	# The metric comes from /etc/iface-metrics so the whole ladder is in one file.
+	ip route add default via 192.168.100.75 dev usb0 \
+		metric $(/usr/sbin/iface-metric usb0)
 	rm /var/lib/misc/dnsmasq.leases
 fi
 

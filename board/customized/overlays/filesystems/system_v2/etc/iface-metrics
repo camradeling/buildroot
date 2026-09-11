@@ -1,0 +1,29 @@
+# Default-route priority for every uplink on the board: lowest metric wins.
+#
+# This is the single source of truth. Before it existed the numbers were spread
+# over four owners - a hardcoded "metric 50" in dhclient-script, a bare
+# "route add default gw" with no metric at all in its TIMEOUT branch,
+# wlan1-fix-metric.sh (which slept 3s and hoped dhclient had finished), and
+# dhclient-exit-hooks - and no file anywhere stated the intended order, so the
+# only way to learn it was to read all four and guess.
+#
+# Read by /usr/sbin/iface-metric, which is what dhclient-script and usbstart.sh
+# call. Interfaces not listed here get the documented fallback in that script;
+# nothing needs to be listed to work, listing it only sets its priority.
+#
+# The kernel picks the lowest-metric default route for forwarded packets, and
+# netpolicy's NAT rules match at packet time, so changing a number here is the
+# whole of changing which uplink the board and its LAN clients use. Leave gaps:
+# a new uplink should be insertable without renumbering.
+#
+# Not listed on purpose: tun*/tap*. A VPN takes the default route only if its own
+# config lets the server push one, and "redirect-gateway def1" installs
+# 0.0.0.0/1 + 128.0.0.0/1, which beat any default route regardless of metric. So
+# the tunnel is not part of this ladder - see workplans/002-routing-model.md.
+#
+# iface   metric
+eth0      100
+eth0:1    100
+wlan1     200
+wwan0     700
+usb0      2000

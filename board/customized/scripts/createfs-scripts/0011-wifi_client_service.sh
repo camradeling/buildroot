@@ -26,10 +26,14 @@ if [[ ! -z "${WIFI_AP_WLAN_NAME}" ]]; then
 	print_green "WIFI_AP_WLAN_NAME=${WIFI_AP_WLAN_NAME}"
 fi
 
-## wlan1-client-setup.sh was removed when NAT moved to netpolicy.service. Delete
-## it explicitly: output/target/ is not wiped between builds and the overlay rsync
-## has no --delete, so the old copy would keep shipping.
+## Both of these were removed from the overlay: wlan1-client-setup.sh when NAT
+## moved to netpolicy.service, wlan1-fix-metric.sh when the default-route metrics
+## moved to /etc/iface-metrics. Delete them explicitly: output/target/ is not
+## wiped between builds and the overlay rsync has no --delete, so the old copies
+## would keep shipping - and rc.local runs everything in /etc/scripts/*.sh, so a
+## stale wlan1-fix-metric.sh would still be re-adding a metric-200 route by hand.
 delete_file_silent ${TARGET_DIR}/etc/scripts/wlan1-client-setup.sh
+delete_file_silent ${TARGET_DIR}/etc/scripts/wlan1-fix-metric.sh
 
 ## enable wlan1 services if WIFI_CLIENT=ON
 ##
