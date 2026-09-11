@@ -44,6 +44,7 @@ fail()
 ## carry its own runtime condition.
 ALWAYS_ON="lighttpd.service
 modbusgw-gpio.service
+netpolicy.service
 networking.service
 rc-local.service
 remote-fs.target

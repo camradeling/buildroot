@@ -10,8 +10,10 @@ ConditionPathExists=/etc/wpa_supplicant_wlan1.conf
 [Service]
 Type=simple
 ExecStart=/sbin/wpa_supplicant -i wlan1 -c /etc/wpa_supplicant_wlan1.conf
-ExecStartPost=/etc/scripts/wlan1-client-setup.sh start
-ExecStopPost=/etc/scripts/wlan1-client-setup.sh stop
+# wlan1-client-setup.sh is gone: all it ever did was masquerade out wlan1 and add
+# two FORWARD rules, and NAT is now installed once at boot by netpolicy.service,
+# keyed on the LAN subnet rather than on an uplink. Hooking it here also meant
+# restarting wpa_supplicant removed NAT for the whole board.
 Restart=always
 RestartSec=5s
 
