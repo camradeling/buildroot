@@ -11,10 +11,12 @@
 #   optional service = [Install] kept + Condition*= on a config file
 #                      + createfs deletes that config file when the var is OFF
 #
-# The three rules below check that this design is actually in force, so that a
-# newly added unit cannot silently start shipping enabled - which is how
+# Rules A-C below check that this design is actually in force, so that a newly
+# added unit cannot silently start shipping enabled - which is how
 # openvpn@server.service and wpa_supplicant_wlan1.service ended up running on
-# images built with VPN_CLIENT=OFF / WIFI_CLIENT=OFF.
+# images built with VPN_CLIENT=OFF / WIFI_CLIENT=OFF. Rules D and E cover the
+# other way a config can rot: files that used to be installed and no longer
+# should be, and files that have to be present for something to have one owner.
 #
 # Runs once per filesystem type (ext2 and tar here), on a throwaway copy of
 # target/ that is deleted afterwards, so it must stay read-only - it is.
@@ -200,7 +202,7 @@ check_feature USB_RNDIS   "${USB_NET_STATE}"     "dnsmasq_usb0.service" \
 check_feature VPN_CLIENT  "${VPN_CLIENT:-OFF}"   "openvpn@client.service" \
 	"/etc/openvpn/client.conf /etc/openvpn/configs/client.conf"
 check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
-	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules"
+	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh"
 
 ## openvpn@client.service is the one gated unit preset-all does not manage
 ## (openvpn@.service is a real template), so here presence in .wants is meaningful
@@ -211,6 +213,38 @@ if [[ "${VPN_CLIENT:-OFF}" == "ON" ]]; then
 elif [[ -L "${WANTS_DIR}/openvpn@client.service" ]]; then
 	fail "VPN_CLIENT is off but openvpn@client.service is still enabled"
 fi
+
+## D. Paths that must be gone from the image whatever the feature flags say.
+##
+## output/target/ is not wiped between builds and neither the overlay rsync nor
+## the createfs copies use --delete, so dropping a file from an overlay does not
+## remove it from the image - it just stops being updated. For these particular
+## files that is a live regression and not dead weight, because something still
+## executes them: rc.local runs every /etc/scripts/*.sh at boot, dhclient-script
+## sources /etc/dhclient-exit-hooks on every lease, and ifupdown reads
+## interfaces.d. Each one used to be an owner of something that now has exactly
+## one owner, so a leftover copy means two owners again.
+RETIRED="/etc/scripts/quectel_ecm.sh
+/etc/scripts/quectel_ecm_up.sh
+/etc/scripts/wlan1-fix-metric.sh
+/etc/scripts/wlan1-client-setup.sh
+/etc/dhclient-exit-hooks
+/etc/network/interfaces.d/wwan0"
+
+for path in ${RETIRED}; do
+	if [[ -e "${TARGET_DIR}${path}" || -L "${TARGET_DIR}${path}" ]]; then
+		fail "${path} is retired but is still in the image; the createfs script" \
+			"that used to install it has to delete it explicitly"
+	fi
+done
+
+## E. The metric ladder is a single source of truth only if it is actually there.
+for path in /etc/iface-metrics /usr/sbin/iface-metric; do
+	if [[ ! -e "${TARGET_DIR}${path}" ]]; then
+		fail "${path} is missing, so every default route would take the" \
+			"fallback metric instead of the one the table specifies"
+	fi
+done
 
 if [[ ${RC} -eq 0 ]]; then
 	print_green "INFO: after-preset-check: systemd unit gating matches ${VARS_FILE}"

@@ -6,7 +6,10 @@
 # that mode the modem shows up as serial ports only and there is no network
 # interface. Supported values on the EC200A are 1 (ECM) and 3 (RNDIS).
 #
-# Started by udev on plug-in: 99-quectel-ecm.rules -> quectel-ecm.service
+# Started by udev on plug-in: 99-quectel-ecm.rules -> quectel-ecm.service.
+# Lives in /usr/libexec/quectel/ and not /etc/scripts/ deliberately: rc.local runs
+# every /etc/scripts/*.sh at boot with no arguments, and udev is the only correct
+# trigger for this one.
 
 source /etc/system.vars 2>/dev/null
 
@@ -80,24 +83,32 @@ function at_cmd()
 	tr -d '\r' < ${AT_OUT}
 }
 
-## wait for the modem and its serial ports to show up
-MODEM=""
-PORTS=""
-waited=0
-while [ ${waited} -lt ${AT_PORT_WAIT} ]; do
-	MODEM=$(find_modem)
-	if [ -n "${MODEM}" ]; then
-		PORTS=$(list_ports ${MODEM})
-		[ -n "${PORTS}" ] && break
-	fi
-	sleep 1
-	waited=$((waited + 1))
-done
-
+## Is there a modem at all? Answer this before waiting for anything.
+##
+## The old loop asked "modem AND ports?" up to AT_PORT_WAIT times, so with no
+## modem plugged in it burned the full 20s before concluding there was nothing to
+## do. That cost nothing while udev was the only trigger, but this script also sat
+## in /etc/scripts/, which rc.local runs in full on every boot - and
+## rc-local.service is ordered before hostapd, so every modem-less boot delayed
+## the AP by 20s. The script now lives in /usr/libexec/quectel/ where rc.local
+## cannot reach it, and exits immediately anyway: sysfs already knows whether a
+## USB device is present, there is nothing to wait for.
+MODEM=$(find_modem)
 if [ -z "${MODEM}" ]; then
 	log "no Quectel device (${QUECTEL_VID}) found, nothing to do"
 	exit 0
 fi
+
+## Only now is waiting justified: the modem is on the bus, so its ttyUSB ports
+## are coming, they are just not bound yet.
+PORTS=""
+waited=0
+while [ ${waited} -lt ${AT_PORT_WAIT} ]; do
+	PORTS=$(list_ports ${MODEM})
+	[ -n "${PORTS}" ] && break
+	sleep 1
+	waited=$((waited + 1))
+done
 
 if [ -z "${PORTS}" ]; then
 	log "ERROR: Quectel found at ${MODEM} but no ttyUSB port appeared in ${AT_PORT_WAIT}s"

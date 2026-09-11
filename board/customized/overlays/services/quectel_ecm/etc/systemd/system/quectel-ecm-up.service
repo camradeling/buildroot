@@ -1,21 +1,47 @@
 [Unit]
-Description=Configure the Quectel ECM network interface
-# Started on demand by udev (99-quectel-ecm.rules) when the ECM net device
-# appears, not enabled at boot. No RemainAfterExit: the modem re-enumerates
-# after a mode switch or a replug, and an "active" unit would not be re-run.
-After=network.target
+Description=DHCP client for the Quectel ECM uplink (wwan0)
+# Started by udev when the ECM net device appears (99-quectel-ecm.rules), never
+# enabled at boot: on a board with no modem there is no wwan0 and nothing to do.
+#
+# BindsTo, not just After: systemd stops this unit when the device unit goes away,
+# which is the one thing the previous ifupdown shape could not do - it left an
+# address, a default route and an orphaned dhclient behind on every unplug, plus a
+# stale /run/network/ifstate entry that made the next "ifup wwan0" refuse to run.
+BindsTo=sys-subsystem-net-devices-wwan0.device
+After=sys-subsystem-net-devices-wwan0.device
 
 [Service]
-Type=oneshot
-ExecStart=/etc/scripts/quectel_ecm_up.sh
-# ifup daemonizes dhclient, and the default KillMode=control-group makes systemd
-# SIGTERM everything left in the cgroup the moment this oneshot deactivates - so
-# dhclient was killed in the same second it logged "bound to ... renewal in
-# 40247 seconds", leaving wwan0 with an address nobody would ever renew.
-# KillMode=process limits the kill to ExecStart itself.
+# Type=simple with dhclient in the foreground: the client is now the main process,
+# so systemd's lifetime and the lease's lifetime are the same thing.
 #
-# This is a stopgap for the ifupdown shape. Phase 1 of workplans/002 replaces
-# the whole unit with the dhclient_wlan1.service shape (Type=simple,
-# BindsTo=sys-subsystem-net-devices-wwan0.device, dhclient -d, Restart=always),
-# where the client is the main process and no KillMode override is needed.
-KillMode=process
+# The old shape was Type=oneshot running "ifup wwan0", which daemonized dhclient
+# and then exited - and the default KillMode=control-group made systemd SIGTERM
+# everything left in the cgroup the moment it did. The journal caught it exactly:
+#
+#   dhclient[20761]: bound to 192.168.43.100 -- renewal in 40247 seconds.
+#   systemd[1]: quectel-ecm-up.service: Deactivated successfully.
+#
+# wwan0 kept its address and its route, because nothing removes those, so the link
+# looked healthy while having no client left to renew an 11-hour lease. That
+# needed a KillMode=process override to paper over; here there is nothing to
+# paper over.
+Type=simple
+ExecStartPre=/sbin/ip link set dev wwan0 up
+ExecStart=/sbin/dhclient wwan0 -d
+# Restart=always is what makes this level-triggered rather than edge-triggered,
+# and it is the fix for the outage that motivated the whole rework: after an
+# AT+CFUN=1,1 the modem re-enumerates, wwan0 comes back as a fresh ifindex with
+# no address, and dhclient dies with "receive_packet failed on wwan0: Network is
+# down". udev's ENV{SYSTEMD_WANTS} does *not* re-fire there - it only creates a
+# job when the device unit transitions into active, and
+# sys-subsystem-net-devices-wwan0.device stayed "active plugged" across the entire
+# reset, so the Wants= was already satisfied and nothing was started. A modem
+# reset therefore used to need a manual "systemctl start quectel-ecm-up.service".
+# Now the client just gets restarted until it has a lease again.
+Restart=always
+RestartSec=5s
+
+# The default route's metric comes from /etc/iface-metrics via dhclient-script,
+# not from here and not from an exit hook. /etc/dhclient-exit-hooks used to
+# delete and re-add the route to force metric 700, because dhclient-script
+# hardcoded 50 and ignored IF_METRIC; both of those are gone.

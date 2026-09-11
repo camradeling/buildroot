@@ -8,7 +8,13 @@ ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c
 
 # Once the modem is in ECM mode its network function shows up as a separate net
 # device (renamed to wwan0 by 79-quectel-ecm-name.rules). Nothing else in the
-# image would configure it: there is no 80-ifupdown.rules here, so allow-hotplug
-# never fires, and putting the modem in "ifup -a" would make every boot without
-# a modem wait for DHCP. So configure it from udev, on plug-in only.
+# image would configure it, so start the DHCP client from here.
+#
+# This only has to fire once, when the device first appears: quectel-ecm-up.service
+# is BindsTo= the wwan0 device unit with Restart=always, so it survives the modem
+# re-enumerating and stops when the modem is really unplugged. It used to be a
+# oneshot that this rule had to re-trigger on every re-enumeration, which does not
+# work - SYSTEMD_WANTS only creates a job when the device unit *transitions* into
+# active, and it does not transition across a modem reset. See the unit for the
+# full story.
 SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
