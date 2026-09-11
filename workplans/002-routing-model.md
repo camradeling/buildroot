@@ -320,8 +320,10 @@ removal from the defconfig rather than for the allowlist.
 ## Field findings: the `wwan0` bring-up path
 
 Measured on live testbot4 hardware (EC200A, `EC200ACNHAR01A07M16`, China Telecom)
-while chasing "wwan0 is up but no internet". Four separate defects, in the order
-they were found. The first three are fixed; the fourth is the case for Phase 1.
+while chasing "wwan0 is up but no internet". Five separate defects, in the order
+they were found; all are fixed. The fourth is also the case for Phase 1, and the
+fifth is the one that came back — the same blackhole as the first, reached by a
+different route, on an image that already carried the fix for it.
 
 ### 1. `AT+QNETDEVCTL` is not persistent (fixed)
 
@@ -419,6 +421,90 @@ unit activates, on the first boot and on every re-enumeration, with no property 
 lose. `after-preset-check.sh` rule F fails the build if `preset-all` ever stops
 creating that link, since an image without it boots, switches the modem to ECM and
 leaves `wwan0` addressless — a failure with no error message anywhere.
+
+### 5. One lock for two jobs, and a ten-minute blackhole (fixed)
+
+Reported as "testbot is up but internet is not working" on the image that already
+had finding 1's `ensure_netdev_bound()` in it. The modem again reported
+`+QNETDEVCTL: 0,0,0,0`, and this time the reason was on our side of the serial
+port: **`quectel_ecm.sh` never ran its checks at all.**
+
+`modem-time` and `quectel_ecm.sh` both talk to the same ttyUSB, so they were made
+to share `/run/quectel_ecm.lock`. But the two need opposite lock semantics, and
+they had the same one:
+
+```
+16:25:04.869  Started Set system clock from the Quectel modem   <- modem-time
+16:25:04.945  Started Switch Quectel modem to ECM mode          <- quectel_ecm, 76ms later
+16:25:05.172  quectel-ecm.service: Deactivated successfully     <- 227ms in, exit 0, silent
+```
+
+`modem-time` polls, so it holds the port for a full AT round (port discovery plus
+two commands, ~9 s measured) and it won the race by 76 ms. `quectel_ecm.sh`'s
+`flock -n 9 || exit 0` is a *single-instance* guard — "another mode switch is
+already running, I have nothing to add" — and applying it to a *port* contention
+turned it into "someone else is using the modem, so skip the entire job". Not one
+`quectel_ecm` line appears in the journal for ten minutes.
+
+What followed looked healthy from every vantage point on the board: `wwan0`
+appeared, `dhclient` took 192.168.43.100 from the modem's own DHCP server, the
+metric-700 default route was installed, `ping 192.168.43.1` answered — and not one
+packet reached the carrier, because the data call was never bound. The user's
+laptop associated at 16:25:15, had a lease at 16:25:20, saw nothing work, and gave
+up at 16:25:45. The blackhole ended at 16:35:37, when an unrelated modem
+re-enumeration finally let the mode switch win the lock and assert
+`AT+QNETDEVCTL`.
+
+The fix is two locks with the semantics each job actually needs
+(`quectel_at.inc`):
+
+| Lock | fd | Mode | Owner | Question it answers |
+|---|---|---|---|---|
+| `/run/quectel_at.lock` | 8 | blocking, `-w ${LOCK_WAIT}` | both scripts, via `with_modem_lock` | may I talk to the serial port? |
+| `/run/quectel_ecm.lock` | 9 | `flock -n`, exit 0 | `quectel_ecm.sh` only | is another mode switch already running? |
+
+`quectel_ecm.sh` now runs *all* of its AT work — port discovery, the
+`QNETDEVCTL` assertion, the `usbnet` read, the mode switch — inside one
+`with_modem_lock ecm_check` hold with `LOCK_WAIT=60`, because waiting a minute for
+a poller that holds the port for nine seconds is obviously right and skipping the
+job is obviously wrong. `with_modem_lock` returns **111** when it never got the
+port, which is deliberately distinct from anything `ecm_check` returns: "the modem
+was busy" and "the modem refused" are different failures, and it was the first of
+them that used to be silent.
+
+Contributing factor, not the cause, and **not fixed**: `dhclient` starts at boot+3 s
+with the fake pre-NITZ clock, and the jump when `modem-time` sets the real clock
+(`+60745205 s` on the current image) expires all of its timers at once. On the
+outage boot that caught it mid-`DHCPDISCOVER`: `No DHCPOFFERS received` →
+`sleeping`, and the retry only landed at 16:28:17, so for the first 3.4 minutes
+`wwan0` had no address either. Whether it hurts is pure luck of ordering — on the
+verification boot below the lease landed 19 s *before* the jump and the uplink was
+up throughout. It is benign in the steady state (the lease comes from the modem's
+own always-on DHCP server and `QNETDEVCTL` autoconnect redials by itself), but the
+renewal deadline is left in the past and nothing has been measured about what
+`dhclient` does with an 11-hour lease it thinks expired two years ago. If this ever
+needs fixing the shape is ordering, not retries: set the clock before starting the
+DHCP client, or restart the client once the clock moves.
+
+Verified on the rebuilt image (slot 1), on the first boot after the deploy — the
+same race, now won by waiting instead of skipping:
+
+```
+15:42:36.743  Starting Set the system clock from the Quectel modem (AT+QLTS)
+15:42:36.750  Starting DHCP client for the Quectel ECM uplink (wwan0)
+15:42:36.760  Starting Switch Quectel modem to ECM mode        <- 17ms behind again
+15:42:42.077  modem_time: attempt 1/12: ... outside the plausible window   <- held the port
+15:42:44.569  dhclient: DHCPACK of 192.168.43.100 from 192.168.43.1
+15:42:47.152  quectel_ecm: data call not bound (+QNETDEVCTL: 0,0,0,0), binding it
+15:42:50.521  quectel_ecm: AT+QNETDEVCTL=1,1,1 accepted
+15:42:52.892  quectel_ecm: usbnet=1 (ECM) already set, nothing to do
+```
+
+`quectel_ecm` lost the port by 17 ms, waited ~10 s for `modem-time`'s first attempt
+to finish, and did its whole job — 11 s from enumeration to a bound data call
+instead of ten minutes to none. No `111`, no `flock` timeout, no failed units.
+`ping 1.1.1.1` from the board: 74 ms average, and the probe through the tunnel
+answers `HTTP/1.1 301`.
 
 ## Does any of this need a watcher?
 
@@ -1014,9 +1100,12 @@ steps 5–8 are overlay/script-only.
   traffic resumes without touching a rule. Compare against the 24s recovery
   measured in Phase 1.
 - Before blaming Xray for anything, re-run the two probes that isolate the link
-  from the config: `nc -w 8 170.205.36.149 443` and
+  from the config: `: < /dev/tcp/170.205.36.149/443` (a bare connect, `$?` = 0) and
   `curl -k --resolve www.cloudflare.com:443:170.205.36.149 https://www.cloudflare.com/`.
   Both pass today; if they stop passing, the SIM or the server changed, not us.
+  Note the connect test is bash's, not `nc`'s: this target's netcat does not bound
+  a read with `-w` (see the hardening section), so `nc -w 8 host 443` can sit there
+  indefinitely and prove nothing either way.
 
 #### Results, measured on the board after the three fixes above
 
@@ -1303,7 +1392,9 @@ rejected — it is 22 years low).
 
 Asked of the working image, answered by reading the units and `systemctl show`
 rather than by guessing. Four gaps, three fixes, all three implemented and measured
-on the board (slot 2).
+on the board (slot 2) — and then a fourth fix, because the third of them shipped
+with a bug that made it worse than nothing on the first real outage it met. That
+one has its own section below; it is the more useful half of this story.
 
 ### The four failure modes, as they were
 
@@ -1340,23 +1431,42 @@ destination of `1.1.1.1:80`, and `/usr/sbin/xray-health` runs once a minute from
 `xray-health.timer`:
 
 ```sh
-printf 'HEAD / HTTP/1.0\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n' \
-        | nc -w 5 127.0.0.1 5301 | grep -q '^HTTP/1\.[01] '
+exec 3<>/dev/tcp/${host}/${port}                 # bash, not nc - see below
+printf 'HEAD / HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n' ${host} >&3
+IFS= read -t 5 -r line <&3                       # rc 0 = a line, 1 = EOF, 142 = timeout
+case "${line}" in HTTP/1.[01]\ *) : ;; esac      # only rc 0 with this can be a live path
 ```
 
-A `nc -z` on that port proves nothing — Xray accepts the local socket before it
-dials anything — so the probe has to be a request with a reply, and one HTTP `HEAD`
-exercises the inbound, the outbound, the REALITY handshake, the server and its exit.
-Cloudflare answers `:80` with a 301, which is proof enough. `nc` is GNU netcat 0.7.1
-from `BR2_PACKAGE_NETCAT`; busybox has no `nc` applet in this defconfig, so rule G
-checks for it.
+A bare connect on that port proves nothing — Xray accepts the local socket before
+it dials anything — so the probe has to be a request with a reply, and one HTTP
+`HEAD` exercises the inbound, the outbound, the REALITY handshake, the server and
+its exit. Cloudflare answers `:80` with a 301, which is proof enough. `HTTP/1.0`
+with `Connection: close`, so the far end hangs up and the read cannot block on a
+connection nobody will say anything more on.
+
+**Why bash and not `nc`, which is what this first shipped as.** The target has no
+`timeout(1)`, and GNU netcat 0.7.1's `-w` bounds the *connect*, not the *read* —
+measured on the live board with the tunnel's egress blackholed: `printf ... | nc -w
+5 127.0.0.1 5301` was still running after 25 s with zero bytes read. See the
+outage below; `read -t 5` returns 142 in exactly five seconds on the same
+connection. Rule G therefore asserts on `/bin/bash` and on the `/dev/tcp/*/*`
+literal inside it, since network redirections are a build-time bash option
+(`--enable-net-redirections`) whose absence is invisible until the probe can never
+succeed and the box restarts Xray forever. `BR2_PACKAGE_NETCAT=y` stays in the
+defconfig — nothing in the image depends on it now, but it is worth having by hand
+on a board with no `telnet`; just do not build a timeout out of it.
 
 It is a reconciler, not a one-shot, with its state in `/run/xray-health/`:
 
-- **preconditions** — `XRAY_CLIENT=ON`, `xray.service` active, and a default route
-  present. The last one matters: without it a modem that lost its carrier looks
-  exactly like a dead server, and the box would restart Xray every five minutes
-  until signal came back. `dhclient` withdrawing the default route is the signal.
+- **preconditions** — `XRAY_CLIENT=ON` and `xray.service` active. Nothing else:
+  "is the uplink up" is asked by probing, not by looking at the routing table. The
+  original check here was "does a default route exist", which is worthless on this
+  board — `usb0` carries a static default at metric 2000, so one always exists,
+  carrier or no carrier. It is replaced by a second probe, `1.1.1.1:80` **direct**,
+  run only on a tick whose tunnel probe already failed: if the direct path is dead
+  too, the counter is reset and the tick logs "the uplink is down, so this is not
+  the tunnel's fault". That is the honest form of the question, and it costs one
+  `HEAD` on a tick that was already going to report a failure.
 - 3 consecutive failures (≈3 min) → **restart `xray.service`**, at most once per
   `COOLDOWN` (300s), because a restart drops every live connection through the
   tunnel.
@@ -1375,24 +1485,65 @@ Thresholds are script constants overridable from the environment
 `/etc/system.vars` keys, because nothing else needs to agree with them. A successful
 probe logs nothing — a per-minute timer that logs is a journal that nobody reads.
 
-### Measured on the board
+### The health check became the outage (fixed)
 
-Deployed to slot 2. The tunnel was faked dead with
-`iptables -I OUTPUT -d <server> -p tcp --dport 443 -j REJECT`, which leaves the
-process healthy and every connection through it broken — exactly the mode nothing
-used to notice — and `xray-health` was then run by hand with its real thresholds
-(timer stopped, to control the sequence):
+Found while diagnosing field finding 5 above, in code written the day before, on
+the same board. From 16:28:00 to 16:35:01 the journal has one line per minute and
+it is always the same one:
 
 ```
-xray-health: no HTTP reply through the tunnel (1/3)
-xray-health: no HTTP reply through the tunnel (2/3)
+systemd[1]: xray-health.service: start operation timed out. Terminating.
+systemd[1]: xray-health.service: Failed with result 'timeout'.
+```
+
+Zero `xray-health` lines. The tunnel was genuinely dead (the modem's data call was
+unbound, so nothing reached the carrier), the LAN was blackholed, and the one thing
+that existed to notice that was being killed at `TimeoutStartSec=60` every single
+tick — because `nc -w 5` does not bound a read, so the probe hung and the counter
+in `/run/xray-health/fails` never advanced past its initial value. The escalation
+was never reached, not once in seven minutes.
+
+Reproduced deterministically afterwards with
+`iptables -I OUTPUT -o wwan0 -p tcp -j DROP`: the `nc` was still running after 25 s
+having read nothing. Three changes came out of it, and the second two matter more
+than the first:
+
+1. the probe is bash's `/dev/tcp` + `read -t` (above), which is bounded by
+   construction;
+2. **the failure is recorded before the probe runs**, so a process that does not
+   survive its own probe still counted;
+3. **escalation is driven from the state file, before this tick probes anything.**
+   A probe that wedges anyway — a blocking connect, a signal, an OOM kill — must
+   not be able to stall the escalation forever, which is exactly what happened.
+   The recorded state is the input; this tick's measurement only updates it.
+
+`TimeoutStartSec=60` stays as the backstop it should always have been, not as the
+thing standing between a dead tunnel and the LAN.
+
+### Measured on the board
+
+Deployed to slot 2, then re-measured end to end after the probe rewrite. The first
+round faked the tunnel dead with
+`iptables -I OUTPUT -d <server> -p tcp --dport 443 -j REJECT`, which leaves the
+process healthy and every connection through it broken — exactly the mode nothing
+used to notice.
+
+The rewrite was validated against the sharper case, twice, with the timer running
+at its real 60 s and its real thresholds: `-o wwan0 -p tcp --dport 443 -j DROP`, so
+the tunnel is dead *and the direct `:80` probe still answers* — a dead server
+behind a live carrier, which is the only shape in which escalating is correct. The
+full ladder ran, one tick per minute, each tick finishing in 5–6 s:
+
+```
+xray-health: no HTTP reply through the tunnel, the direct path answers (1/3)
+xray-health: no HTTP reply through the tunnel, the direct path answers (2/3)
 xray-health: no HTTP reply through the tunnel after 3 probes, restarting xray.service
 xraypolicy:  LAN DNS upstream: 1.1.1.1          <- ExecStopPost
 xraypolicy:  TPROXY policy removed
 xraypolicy:  LAN DNS upstream: 127.0.0.2        <- ExecStartPost, 1s later
 xraypolicy:  LAN (usb0 wlan0) is TPROXY'd to 127.0.0.1:12345 via fwmark 0x1/table 100
-xray-health: no HTTP reply through the tunnel (1/3)
-xray-health: no HTTP reply through the tunnel (2/3)
+xray-health: no HTTP reply through the tunnel, the direct path answers (1/3)
+xray-health: no HTTP reply through the tunnel, the direct path answers (2/3)
 xray-health: the tunnel is still dead after a restart, taking the TPROXY rules out so the LAN uses the direct path
 xraypolicy:  LAN DNS upstream: 1.1.1.1
 xraypolicy:  TPROXY policy removed
@@ -1400,6 +1551,19 @@ xray-health: the tunnel answers again after 3 failed probes, putting the LAN bac
 xraypolicy:  LAN DNS upstream: 127.0.0.2
 xraypolicy:  LAN (usb0 wlan0) is TPROXY'd to 127.0.0.1:12345 via fwmark 0x1/table 100
 ```
+
+Counted rather than eyeballed: `mangle PREROUTING` TPROXY jumps 2 → 0 across the
+fall-open and back to 2 on recovery, `state` = `down` then `up`, `fails` = 0 at the
+end. With the block left on and the direct path killed too
+(`-o wwan0 -p tcp -j DROP`), the same tick instead logs *"the uplink is down, so
+this is not the tunnel's fault"* and resets the counter — no restart, no repathing.
+
+One wart the escalate-before-probe order created and how it is handled: on the tick
+where the block is lifted, escalation runs first with nothing left to do, so it
+would have logged "the tunnel is still dead" one second before "the tunnel answers
+again". `escalate()` now sets an `ACTED` flag and its no-op branch is silent; the
+caller emits the "still dead" line only when it has a failed probe of its own to
+say it about. Re-verified live.
 
 - After the escalation: `mangle PREROUTING` empty, no `fwmark` rule, `/run/xray-dns.conf`
   = `nameserver 1.1.1.1` — and `nslookup debian.org 192.168.100.1` from a LAN client

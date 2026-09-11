@@ -24,7 +24,12 @@ if [ -z "${QUECTEL_ECM}" ] || [ "${QUECTEL_ECM}" != "ON" ]; then
 fi
 
 # udev fires once per plug-in, but the modem re-enumerates after the mode
-# switch - keep a single instance so the runs do not overlap
+# switch - keep a single instance so the runs do not overlap.
+#
+# Non-blocking, and it is only about *this* script: a second mode switch queued
+# behind the first has nothing left to do. Sharing the serial port with modem-time
+# is a different question with a different answer, and conflating the two is what
+# made this script skip its whole job at boot - see AT_LOCK in quectel_at.inc.
 exec 9> ${LOCK_FILE}
 flock -n 9 || exit 0
 
@@ -63,14 +68,6 @@ if [ -z "${PORTS}" ]; then
 	exit 1
 fi
 
-## find a port that answers AT
-AT_PORT=$(find_at_port "${PORTS}")
-
-if [ -z "${AT_PORT}" ]; then
-	log "ERROR: none of the ports (${PORTS}) answered AT"
-	exit 1
-fi
-
 # Bind the data call to the USB network device. Without this the ECM link comes
 # up perfectly - the host gets a lease from the modem's internal DHCP server and
 # can ping the modem at 192.168.43.1 - but nothing is forwarded to the PDP
@@ -85,9 +82,10 @@ fi
 # Note AT+QCFG="nat" is deliberately left alone - traffic flows with nat=0.
 function ensure_netdev_bound()
 {
+	local at_port=$1
 	local state
 
-	state=$(at_cmd ${AT_PORT} 'AT+QNETDEVCTL?' 2 | sed -n -E 's/.*\+QNETDEVCTL: *([0-9,]+).*/\1/p' | head -1)
+	state=$(at_cmd ${at_port} 'AT+QNETDEVCTL?' 2 | sed -n -E 's/.*\+QNETDEVCTL: *([0-9,]+).*/\1/p' | head -1)
 	if [ -z "${state}" ]; then
 		log "AT+QNETDEVCTL not supported on this modem, skipping the data call binding"
 		return 0
@@ -101,39 +99,68 @@ function ensure_netdev_bound()
 	esac
 
 	log "data call not bound (+QNETDEVCTL: ${state}), binding it with autoconnect"
-	if at_cmd ${AT_PORT} 'AT+QNETDEVCTL=1,1,1' 3 | grep -q "OK"; then
+	if at_cmd ${at_port} 'AT+QNETDEVCTL=1,1,1' 3 | grep -q "OK"; then
 		log "AT+QNETDEVCTL=1,1,1 accepted"
 	else
 		log "ERROR: modem refused AT+QNETDEVCTL=1,1,1, wwan0 will have no uplink"
 	fi
 }
 
-ensure_netdev_bound
+## Everything that talks to the serial port, in one hold of AT_LOCK: finding the
+## port that answers AT is itself an AT round, so it belongs inside.
+function ecm_check()
+{
+	local ports=$1
+	local at_port mode
 
-## read the current usbnet mode
-MODE=$(at_cmd ${AT_PORT} 'AT+QCFG="usbnet"' 2 | sed -n -E 's/.*\+QCFG: "usbnet",([0-9]+).*/\1/p' | head -1)
+	at_port=$(find_at_port "${ports}")
+	if [ -z "${at_port}" ]; then
+		log "ERROR: none of the ports (${ports}) answered AT"
+		return 1
+	fi
 
-if [ -z "${MODE}" ]; then
-	log "ERROR: could not read usbnet mode on ${AT_PORT}"
-	exit 1
+	ensure_netdev_bound ${at_port}
+
+	## read the current usbnet mode
+	mode=$(at_cmd ${at_port} 'AT+QCFG="usbnet"' 2 | sed -n -E 's/.*\+QCFG: "usbnet",([0-9]+).*/\1/p' | head -1)
+
+	if [ -z "${mode}" ]; then
+		log "ERROR: could not read usbnet mode on ${at_port}"
+		return 1
+	fi
+
+	if [ "${mode}" == "${ECM_MODE}" ]; then
+		log "usbnet=${mode} (ECM) already set, nothing to do"
+		return 0
+	fi
+
+	log "usbnet=${mode} on ${at_port}, switching to ECM (usbnet=${ECM_MODE})"
+
+	if ! at_cmd ${at_port} "AT+QCFG=\"usbnet\",${ECM_MODE}" 2 | grep -q "OK"; then
+		log "ERROR: modem refused AT+QCFG=\"usbnet\",${ECM_MODE}"
+		return 1
+	fi
+
+	## the new mode is kept in the modem NVRAM and applied after a reset; the reset
+	## re-enumerates the modem, so udev starts us again and we confirm the new mode
+	log "usbnet=${ECM_MODE} stored, resetting modem"
+	at_cmd ${at_port} "AT+CFUN=1,1" 2 > /dev/null
+	return 0
+}
+
+## Wait for the port rather than skip: modem-time holds AT_LOCK for one AT round at
+## a time (port discovery plus two commands, ~9s measured) and drops it between
+## attempts, so a minute is far more than enough to get in. The old non-blocking
+## shape lost this race at boot by 76ms and left the modem's data call unbound - the
+## outage AT_LOCK exists to prevent.
+LOCK_WAIT=60
+with_modem_lock ecm_check "${PORTS}"
+RC=$?
+
+if [ ${RC} -eq 111 ]; then
+	log "ERROR: something else held ${AT_LOCK} for ${LOCK_WAIT}s, so the data call" \
+		"binding and the usbnet mode went unchecked on this plug-in"
 fi
-
-if [ "${MODE}" == "${ECM_MODE}" ]; then
-	log "usbnet=${MODE} (ECM) already set, nothing to do"
-	exit 0
-fi
-
-log "usbnet=${MODE} on ${AT_PORT}, switching to ECM (usbnet=${ECM_MODE})"
-
-if ! at_cmd ${AT_PORT} "AT+QCFG=\"usbnet\",${ECM_MODE}" 2 | grep -q "OK"; then
-	log "ERROR: modem refused AT+QCFG=\"usbnet\",${ECM_MODE}"
-	exit 1
-fi
-
-## the new mode is kept in the modem NVRAM and applied after a reset; the reset
-## re-enumerates the modem, so udev starts us again and we confirm the new mode
-log "usbnet=${ECM_MODE} stored, resetting modem"
-at_cmd ${AT_PORT} "AT+CFUN=1,1" 2 > /dev/null
 
 rm -f ${AT_OUT}
-exit 0
+exit ${RC}

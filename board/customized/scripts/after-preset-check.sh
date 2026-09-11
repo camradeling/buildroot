@@ -299,10 +299,22 @@ if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
 			"timers.target.wants, so a dead tunnel would never be noticed"
 	fi
 
-	## The probe needs a client, and busybox has no nc applet in this defconfig.
-	if [[ ! -e "${TARGET_DIR}/usr/bin/nc" && ! -e "${TARGET_DIR}/bin/nc" ]]; then
-		fail "XRAY_CLIENT=ON but there is no nc in the image, so xray-health's probe" \
-			"can never succeed and it would restart xray forever"
+	## The probe is one HTTP request that has to be bounded in time, and on this
+	## target the only thing that can do that is bash: there is no timeout(1), and
+	## GNU netcat's -w does not bound the read - measured, with the tunnel's egress
+	## blackholed, as an nc still running after 25s. So xray-health uses bash's
+	## /dev/tcp plus "read -t", and both halves of that have to be in the image.
+	## The glob pattern below is the literal from bash's redir.c and only exists in
+	## a bash configured with network redirections (--enable-net-redirections),
+	## which is exactly the thing that is invisible until the probe silently never
+	## succeeds and the box restarts xray forever.
+	BASH_BIN="${TARGET_DIR}/bin/bash"
+	if [[ ! -f "${BASH_BIN}" ]]; then
+		fail "XRAY_CLIENT=ON but /bin/bash is missing, and xray-health's probe needs" \
+			"bash's /dev/tcp (BR2_PACKAGE_BASH=y?)"
+	elif ! grep -q '/dev/tcp/\*/\*' "${BASH_BIN}"; then
+		fail "XRAY_CLIENT=ON but /bin/bash has no network redirections compiled in," \
+			"so xray-health's probe can never connect and it would restart xray forever"
 	fi
 
 	## Policy routing is the one thing busybox's ip applet cannot do, and it does
