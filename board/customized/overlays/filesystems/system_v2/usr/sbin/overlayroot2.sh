@@ -106,12 +106,12 @@ mount --move /mnt/rw /mnt/newroot/rw
 if [ ! -d ${NEWROOT}/media/data ]; then
         mkdir ${NEWROOT}/media/data
 fi
-DATAPARTSIZE=$(${NEWROOT}/usr/sbin/fdisk -l /dev/mmcblk${mmcnum} | grep ${DATAPART} | awk '{print $5}')
-echo "DATAPARTSIZE = ${DATAPARTSIZE}"
-NEEDRESIZE=false
-if [ ${DATAPARTSIZE} == "100M" ]; then
-	NEEDRESIZE=true
-fi
+# expandfs.sh decides for itself whether there is anything to grow, by comparing
+# the partition the kernel reports with the filesystem the superblock reports, so
+# it is called unconditionally. The old test here - "is the partition still
+# exactly 100M" - could only ever be true before the partition was grown, so a
+# resize that got as far as repartitioning and then failed was never retried:
+# that is how testbot4 ended up with a 100M filesystem in a 117.5G partition.
 # change to the new overlay root
 cd ${NEWROOT}
 pivot_root . mnt
@@ -120,9 +120,10 @@ exec chroot . sh -c "$(cat <<END
 umount /mnt/proc
 mount -o rw,remount /${SLOTNAME}
 echo "expanding data filesystem"
-if [[ ${NEEDRESIZE} == "true" ]]; then
-	/root/expandfs.sh /mnt/dev/mmcblk${mmcnum} ${DATAPARTNUM} > /root/expandfs.log
-fi
+# tee, not ">": /root is on the tmpfs upper layer, so the log dies with the boot
+# it describes. The console copy is the one that survives, and stderr has to be
+# in it - the old redirection dropped exactly the resize2fs error that mattered.
+/root/expandfs.sh /mnt/dev/mmcblk${mmcnum} ${DATAPARTNUM} 2>&1 | tee /root/expandfs.log
 echo "checking filesystems"
 fsck -y /mnt${BOOTPART}
 e2fsck -y /mnt${DATAPART}
