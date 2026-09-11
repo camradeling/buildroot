@@ -1,0 +1,189 @@
+#!/bin/bash
+# Set the system clock from the modem's network time (AT+QLTS=1, AT+CCLK? as a
+# fallback).
+#
+# This board has no battery-backed RTC, so it boots believing whatever the
+# kernel's build-time default is - measured on the live board: two years in the
+# past. NTP is not an option on the cellular uplink we have: the carrier drops
+# UDP/123 (systemd-timesyncd retried every server in the pool for hours and
+# never got a packet back), while the modem itself knows the correct time from
+# NITZ the moment it registers.
+#
+# A wrong clock is not cosmetic here. Xray's REALITY handshake embeds a client
+# timestamp and the server rejects one that is off by more than a small window,
+# so with a 2024 clock the VPN cannot come up at all. TLS to anything else fails
+# the same way, on certificate validity dates.
+#
+# Started by the wwan0 device unit (see modem-time.service), i.e. every time a
+# working ECM modem appears - the same level-triggered shape
+# quectel-ecm-up.service uses.
+
+source /etc/system.vars 2>/dev/null
+
+LOG_TAG="modem_time"
+## Own scratch file: quectel_ecm.sh has its own, and while the lock keeps the two
+## from talking to the port at the same time, sharing the buffer would still be
+## an invitation to read someone else's reply.
+AT_OUT="/run/modem_time.at"
+source /usr/libexec/quectel/quectel_at.inc
+
+## The modem answers immediately, but it answers with garbage until it has seen
+## NITZ from the network. Poll for two minutes, dropping the modem lock between
+## attempts so a plug-in mode switch is never blocked by us.
+CCLK_TRIES=12
+CCLK_INTERVAL=10
+
+## Do not touch the clock for less than this - setting it is not free (timers get
+## recalculated) and the modem's second is not more accurate than ours.
+MIN_SKEW=5
+
+## Plausibility window for whatever the modem reports. The lower bound is this
+## script's own mtime: it is written at build time, so no correct time can
+## predate it, and it needs no maintenance. The upper bound is ten years later,
+## to reject the other failure mode (a modem answering with an epoch far in the
+## future) instead of trusting it.
+##
+## One day of slack below the mtime, because the bound only has to catch a modem
+## that has not seen NITZ yet - those answer with 1980 or 2004 - and without the
+## slack anything that shifts the reading by hours (a build host whose clock runs
+## ahead, an unexpected time zone in the reply) turns a correct clock into a build
+## failure. That is not hypothetical: it is how the AT+CCLK? offset bug below
+## presented, as "modem reports 2026-09-11 06:19:15, outside the plausible
+## window" for a modem that was in fact right.
+BUILT=$(date -u -r "$0" +%s 2>/dev/null)
+FLOOR=$(( ${BUILT:-0} - 86400 ))
+CEILING=$(( FLOOR + 315360000 ))
+
+if [ -z "${QUECTEL_ECM}" ] || [ "${QUECTEL_ECM}" != "ON" ]; then
+	exit 0
+fi
+
+if [ -z "${BUILT}" ]; then
+	log "ERROR: cannot read the mtime of $0, refusing to trust the modem clock"
+	exit 1
+fi
+
+## Ask the modem for its clock. Run under with_modem_lock by the caller.
+##
+## AT+QLTS=1 first, because it is the only one of these that says which zone it
+## means: Quectel documents mode 1 as the current GMT time, mode 2 as local. Both
+## were measured on the EC25 here against a known-good UTC clock:
+##
+##   AT+CCLK?  -> +CCLK: "26/09/11,14:22:23+32"
+##   AT+QLTS=1 -> +QLTS: "2026/09/11,14:22:25+32,0"    (real UTC was 14:22:2x)
+##   AT+QLTS=2 -> +QLTS: "2026/09/11,22:22:28+32,0"
+##
+## So this modem keeps *UTC* in CCLK and reports +32 (UTC+8) as nothing more than
+## the zone it was told about, while the AT spec says CCLK is local time. Treating
+## it as local and subtracting the offset - which is what this script used to do -
+## produced a clock eight hours behind and REALITY handshakes that could not work.
+## Neither reading is self-describing, so the fix is to stop guessing: ask for GMT
+## explicitly and fall back to CCLK, taken as-is, only if QLTS is unsupported.
+function read_modem_time()
+{
+	local modem ports port stamp cmd
+
+	modem=$(find_modem)
+	[ -n "${modem}" ] || return 1
+
+	ports=$(list_ports ${modem})
+	[ -n "${ports}" ] || return 1
+
+	port=$(find_at_port "${ports}")
+	[ -n "${port}" ] || return 1
+
+	for cmd in 'AT+QLTS=1' 'AT+CCLK?'; do
+		stamp=$(at_cmd ${port} "${cmd}" 2 | parse_modem_time)
+		if [ -n "${stamp}" ]; then
+			echo "${stamp}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+## +CCLK: "26/09/11,18:34:12+20"      ->  "2026-09-11 18:34:12"
+## +QLTS: "2026/09/11,18:34:12+20,0"  ->  "2026-09-11 18:34:12"
+## Two-digit years from CCLK, four from QLTS; the zone and the DST field that some
+## firmware appends are matched only so they cannot be mistaken for the seconds,
+## and are then dropped - see read_modem_time for why they are not arithmetic.
+function parse_modem_time()
+{
+	local stamp
+
+	stamp=$(sed -n -E 's@.*\+(QLTS|CCLK): *"?([0-9]{2,4})/([0-9]{2})/([0-9]{2}),([0-9]{2}):([0-9]{2}):([0-9]{2})([-+][0-9]{1,2})?.*@\2-\3-\4 \5:\6:\7@p' | head -1)
+	[ -n "${stamp}" ] || return 1
+
+	if [ ${#stamp} -eq 17 ]; then
+		stamp="20${stamp}"
+	fi
+	echo "${stamp}"
+}
+
+## "2026-09-11 18:34:12" (UTC) -> epoch. Echoes nothing if it does not convert.
+function utc_to_epoch()
+{
+	date -u -d "$1" +%s 2>/dev/null
+}
+
+function set_utc_epoch()
+{
+	local epoch=$1
+
+	date -u -s "@${epoch}" > /dev/null 2>&1 && return 0
+	## Fallback for a date(1) that does not take @epoch: hand it the epoch as an
+	## input format instead.
+	date -u -s "$(date -u -D %s -d ${epoch} +'%Y-%m-%d %H:%M:%S')" > /dev/null 2>&1
+}
+
+## No modem on the bus means there is nothing to wait for - do not spend two
+## minutes finding that out.
+if [ -z "$(find_modem)" ]; then
+	log "no Quectel device (${QUECTEL_VID}) found, leaving the clock alone"
+	exit 0
+fi
+
+try=0
+while [ ${try} -lt ${CCLK_TRIES} ]; do
+	try=$((try + 1))
+
+	STAMP=$(with_modem_lock read_modem_time)
+	if [ -n "${STAMP}" ]; then
+		MODEM_EPOCH=$(utc_to_epoch "${STAMP}")
+	else
+		MODEM_EPOCH=""
+	fi
+
+	if [ -n "${MODEM_EPOCH}" ] && [ ${MODEM_EPOCH} -ge ${FLOOR} ] && \
+	   [ ${MODEM_EPOCH} -le ${CEILING} ]; then
+		NOW=$(date -u +%s)
+		SKEW=$(( MODEM_EPOCH - NOW ))
+		[ ${SKEW} -lt 0 ] && SKEW=$(( -SKEW ))
+
+		if [ ${SKEW} -le ${MIN_SKEW} ]; then
+			log "clock already within ${SKEW}s of the modem ($(date -u -R)), leaving it"
+			exit 0
+		fi
+
+		if ! set_utc_epoch ${MODEM_EPOCH}; then
+			log "ERROR: could not set the clock to ${MODEM_EPOCH} (${STAMP})"
+			exit 1
+		fi
+		log "clock set from the modem: ${STAMP} -> $(date -u -R) (was off by ${SKEW}s)"
+		exit 0
+	fi
+
+	## Distinguish the two failures in the journal: nothing parseable at all is a
+	## port problem, a parseable but implausible time is a modem that has not
+	## seen NITZ yet.
+	if [ -z "${STAMP}" ]; then
+		log "attempt ${try}/${CCLK_TRIES}: no usable +QLTS/+CCLK reply from the modem"
+	else
+		log "attempt ${try}/${CCLK_TRIES}: modem reports ${STAMP} UTC, outside the plausible window"
+	fi
+
+	[ ${try} -lt ${CCLK_TRIES} ] && sleep ${CCLK_INTERVAL}
+done
+
+log "ERROR: modem never reported a plausible time, clock left at $(date -u -R)"
+exit 1
