@@ -8,7 +8,11 @@ ConditionPathExists=/etc/wpa_supplicant_wlan1.conf
 [Service]
 Type=simple
 ExecStart=/sbin/dhclient wlan1 -d
-ExecStartPost=/etc/scripts/wlan1-fix-metric.sh
+# No ExecStartPost=wlan1-fix-metric.sh any more. That script slept 3s, hoped
+# dhclient had installed its route by then, deleted it and re-added it with
+# metric 200 - a race it lost whenever the lease took longer, and 3s of delay on
+# every boot when it won. dhclient-script now installs the right metric from
+# /etc/iface-metrics the first time, so there is nothing to fix up afterwards.
 Restart=always
 RestartSec=5s
 
