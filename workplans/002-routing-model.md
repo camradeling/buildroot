@@ -71,7 +71,7 @@ That splits cleanly:
 
 ## Target Model
 
-### Metric ladder — single source of truth
+### Metric ladder — single source of truth (implemented)
 
 `/etc/iface-metrics`, one table, room to insert:
 
@@ -84,12 +84,31 @@ wwan0     700
 usb0      2000
 ```
 
-`dhclient-script` (ours, `system_v2/usr/sbin/`) looks up `$interface` in it and
-falls back to a documented default. Both of its route-installing branches
-(`BOUND`/`REBOOT` and `TIMEOUT`) use the lookup, which closes the metric-0 hole.
-`usbstart.sh` reads its own number from the same file.
+The lookup is one small script, `/usr/sbin/iface-metric <iface>`, rather than a
+function copied into each caller: `dhclient-script` and `usbstart.sh` both need
+it and live in different overlays. It always prints a number and exits 0, so
+callers can inline it — an empty metric would be worse than a wrong one, since
+`route add default gw X metric` with nothing after it is a syntax error and a
+bare `route add default gw X` means metric **0**, outranking everything.
 
-Deletes `wlan1-fix-metric.sh` and `dhclient-exit-hooks` entirely.
+Unlisted interfaces get **900**: below every named uplink, above `usb0`'s
+last-resort 2000. A non-numeric value in the table takes the same fallback
+instead of degenerating to 0.
+
+Both route-installing branches of `dhclient-script` use it, which closes the
+metric-0 hole in the `TIMEOUT` path. `usbstart.sh` reads `usb0` from the same
+file (its metric moves 1000 → 2000, still last).
+
+`wlan1-fix-metric.sh` and `dhclient-exit-hooks` are deleted. `0011` and `0012`
+delete them from `output/target/` too, and `after-preset-check.sh` rule D fails
+the build if any retired path is still in the image — leftovers there are not
+dead weight but a second owner, since `rc.local` runs every `/etc/scripts/*.sh`
+and `dhclient-script` sources `/etc/dhclient-exit-hooks` on every lease.
+
+Verified by unit-testing the lookup against a synthetic table: each listed
+interface returns its own metric, `eth0` and `eth0:1` do not cross-match, an
+unlisted alias, a missing table and a corrupt value all return 900, and the
+script parses under busybox `ash` as well as bash.
 
 ### NAT — keyed on the LAN, not on the uplink (implemented)
 
@@ -158,7 +177,7 @@ through a tunnel, which is right for a road-warrior client but wrong for a
 site-to-site peer that expects the real LAN subnet. The insertion point for a
 `RETURN` on the remote subnets is documented in the script header.
 
-### `wwan0` — fully udev-driven
+### `wwan0` — fully udev-driven (implemented)
 
 Replace the ifupdown path with the shape `dhclient_wlan1.service` already uses:
 `Type=simple`, `BindsTo=`/`After=sys-subsystem-net-devices-wwan0.device`,
@@ -173,20 +192,28 @@ short version: a `Type=oneshot` + `ENV{SYSTEMD_WANTS}` design cannot keep a DHCP
 client running on a modem that re-enumerates, for two independent reasons, and
 the `Type=simple` + `BindsTo` + `Restart=always` shape removes both.
 
-### `/etc/scripts/` hygiene
+### `/etc/scripts/` hygiene (implemented)
 
-Move the Quectel scripts out of the `rc.local` glob (e.g. `/usr/libexec/quectel/`)
-— udev is their only correct trigger, there is no boot-time role to preserve.
-Independently, restructure `quectel_ecm.sh` so it exits immediately when no 2c7c
-device is in sysfs, and only waits for `ttyUSB*` once a modem has been found.
+`quectel_ecm.sh` moved to `/usr/libexec/quectel/`, out of the `rc.local` glob —
+udev is its only correct trigger, there was no boot-time role to preserve. It now
+asks sysfs whether a 2c7c device exists *before* waiting for anything and exits
+immediately when there is none; the `AT_PORT_WAIT` loop only runs once a modem has
+been found, waiting for its `ttyUSB*` ports to bind. `quectel_ecm_up.sh` is gone
+entirely: every job it had (guard on `QUECTEL_ECM`, check the interface exists,
+`ifdown --force` to clear stale `ifstate`, wait for carrier, `ifup`) either moved
+into the unit or stopped existing with ifupdown.
+
+`wlan0-ap-setup.sh` stays in `/etc/scripts/`. It is a service hook, so `rc.local`
+runs it with no arguments and its `case "$1"` matches nothing — harmless, and
+moving it is a separate cleanup with no bug behind it.
 
 ## Phases
 
 | # | Work | Files |
 |---|------|-------|
 | 0 | `rc.local` blackhole rule removed | `system_v2/etc/rc.local` **(done)** |
-| 1 | Quectel scripts out of `/etc/scripts`, wait loop restructured; `wwan0` to the `BindsTo` + `dhclient -d` shape (drops the `KillMode=process` stopgap) | `services/quectel_ecm/*`, `0012-quectel_ecm_service.sh` |
-| 2 | `/etc/iface-metrics` + `dhclient-script` as sole metric owner; delete `wlan1-fix-metric.sh` and `dhclient-exit-hooks`; `usbstart.sh` reads the table | `system_v2/usr/sbin/dhclient-script`, `system_v2/etc/iface-metrics` (new), `wpa_supplicant_wlan1/*`, `usb_gadget/etc/scripts/usbstart.sh` |
+| 1 | Quectel scripts out of `/etc/scripts`, wait loop restructured; `wwan0` to the `BindsTo` + `dhclient -d` shape (drops the `KillMode=process` stopgap) | `services/quectel_ecm/*`, `0012-quectel_ecm_service.sh`, `after-preset-check.sh` **(done)** |
+| 2 | `/etc/iface-metrics` + `iface-metric` as sole metric owner; delete `wlan1-fix-metric.sh` and `dhclient-exit-hooks`; `usbstart.sh` reads the table | `system_v2/usr/sbin/dhclient-script`, `system_v2/etc/iface-metrics` (new), `system_v2/usr/sbin/iface-metric` (new), `wpa_supplicant_wlan1/*`, `usb_gadget/etc/scripts/usbstart.sh`, `0011`, `after-preset-check.sh` **(done)** |
 | 3 | `netpolicy` oneshot unit with the LAN-keyed NAT set; strip `iptables` from the two setup scripts; retire `WIFI_AP_WAN_IFACE` | new `services/netpolicy/{usr/sbin/netpolicy,etc/systemd/system/netpolicy.service}`, `hostapd_wlan0/etc/scripts/wlan0-ap-setup.sh`, `wpa_supplicant_wlan1/etc/scripts/wlan1-client-setup.sh` (deleted), `wpa_supplicant_wlan1.service`, `0010`, `0011`, `after-preset-check.sh`, `system.vars`, `orangepi_new-test.vars`, `testbot3_defconfig`, `testbot4_defconfig` **(done)** |
 | 4 | "OFF means off" — runtime `Condition*=` gating + a post-fakeroot assertion pass | `hostapd.service`, `dnsmasq_wlan0.service`, `dnsmasq_usb0.service`, `wpa_supplicant_wlan1.service`, `dhclient_wlan1.service`, new `openvpn@.service`, `0001`, `0007`, `0008`, `0010`, `0011`, `system.vars`, new `after-preset-check.sh`, `testbot4_defconfig` **(done)** |
 | 5 | *Optional, later:* reachability-based failover watcher; non-OpenVPN protocols | new |
@@ -349,9 +376,13 @@ makes systemd own the client's lifetime, and `Restart=always` recovers from a
 link that drops out from under `dhclient` (which is exactly what
 `receive_packet failed on wwan0: Network is down` in the journal was).
 
-Until Phase 1 lands, a modem reset needs a manual
-`systemctl start quectel-ecm-up.service`. Unplug/replug is untested and may well
-work, since that *does* take the device unit inactive.
+Phase 1 has since landed, so the manual `systemctl start quectel-ecm-up.service`
+after a modem reset should no longer be needed: the unit is `Type=simple` with
+`dhclient -d` as the main process, `BindsTo=`/`After=` the `wwan0` device unit and
+`Restart=always`, so the udev rule only has to fire once — recovery is systemd
+restarting a client that died, not udev re-triggering a oneshot. The udev rules
+themselves are unchanged apart from comments. **Not yet re-tested against a live
+`AT+CFUN=1,1`.**
 
 ## Does any of this need a watcher?
 
