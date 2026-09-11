@@ -26,7 +26,9 @@
 #
 # Scope is /etc/systemd/system/multi-user.target.wants only: that is where both
 # preset-all and our createfs scripts create links. Links under
-# /usr/lib/systemd/system/*.wants are upstream vendor defaults and not ours.
+# /usr/lib/systemd/system/*.wants are upstream vendor defaults and not ours. Units
+# that are enabled into some other target - a device unit for QUECTEL_ECM, a timer
+# for xray-health - are named one by one in rules F and G instead of walked.
 
 set -u
 
@@ -208,7 +210,7 @@ check_feature VPN_CLIENT  "${VPN_CLIENT:-OFF}"   "openvpn@client.service" \
 	"/etc/openvpn/client.conf /etc/openvpn/configs/client.conf"
 check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
 	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service"
-check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service" \
+check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service xray-health.timer xray-health.service" \
 	"/etc/xray/config.json"
 
 ## openvpn@client.service is the one gated unit preset-all does not manage
@@ -281,11 +283,27 @@ fi
 ## condition; these are the pieces whose absence shows up only as "the LAN has no
 ## internet", with the rules installed and nothing behind them.
 if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
-	for path in /usr/bin/xray /usr/sbin/xraypolicy; do
+	for path in /usr/bin/xray /usr/sbin/xraypolicy /usr/sbin/xray-health; do
 		if [[ ! -e "${TARGET_DIR}${path}" ]]; then
 			fail "XRAY_CLIENT=ON but ${path} is missing from the image"
 		fi
 	done
+
+	## The health check is the only thing that notices a tunnel that accepts
+	## connections and carries nothing, and it runs from a timer - so the link
+	## preset-all creates from [Install] is the whole feature. Same silent failure
+	## as rule F: the image boots, xray runs, the LAN blackholes, and nothing says
+	## so. The link lands in timers.target.wants, which rule A does not walk.
+	if [[ ! -L "${TARGET_DIR}/etc/systemd/system/timers.target.wants/xray-health.timer" ]]; then
+		fail "XRAY_CLIENT=ON but xray-health.timer is not linked into" \
+			"timers.target.wants, so a dead tunnel would never be noticed"
+	fi
+
+	## The probe needs a client, and busybox has no nc applet in this defconfig.
+	if [[ ! -e "${TARGET_DIR}/usr/bin/nc" && ! -e "${TARGET_DIR}/bin/nc" ]]; then
+		fail "XRAY_CLIENT=ON but there is no nc in the image, so xray-health's probe" \
+			"can never succeed and it would restart xray forever"
+	fi
 
 	## Policy routing is the one thing busybox's ip applet cannot do, and it does
 	## not fail loudly: it has no "rule" command at all, and it *silently ignores*
@@ -301,15 +319,24 @@ if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
 		fail "XRAY_CLIENT=ON but /usr/sbin/ip is missing (BR2_PACKAGE_IPROUTE2=y?)"
 	fi
 
-	## The dnsmasq configs that exist must forward to the DNS inbound. 0013
-	## appends the line; if the createfs scripts are ever reordered so that 0007
-	## or 0010 rewrites the file afterwards, this catches it at build time instead
-	## of as a DNS leak in the field.
+	## The dnsmasq configs that exist must take their upstream from the file
+	## xraypolicy writes. 0013 appends the line; if the createfs scripts are ever
+	## reordered so that 0007 or 0010 rewrites the file afterwards, this catches it
+	## at build time instead of as a DNS leak in the field.
+	##
+	## no-resolv is checked too, and it is not redundant: it makes dnsmasq ignore
+	## every resolv-file, so leaving one behind turns the line above into a comment
+	## and the LAN silently resolves through nothing at all.
 	for path in /etc/dnsmasq_usb0.conf /etc/dnsmasq_wlan0.conf; do
 		[[ -f "${TARGET_DIR}${path}" ]] || continue
-		if ! grep -q '^server=127\.0\.0\.1#' "${TARGET_DIR}${path}"; then
-			fail "XRAY_CLIENT=ON but ${path} does not forward to the Xray DNS" \
-				"inbound, so LAN clients would resolve around the tunnel"
+		if ! grep -q '^resolv-file=/run/xray-dns\.conf$' "${TARGET_DIR}${path}"; then
+			fail "XRAY_CLIENT=ON but ${path} does not take its upstream from" \
+				"/run/xray-dns.conf, so LAN clients would resolve around the" \
+				"tunnel - or keep resolving through it after it dies"
+		fi
+		if grep -qx 'no-resolv' "${TARGET_DIR}${path}"; then
+			fail "XRAY_CLIENT=ON but ${path} still has no-resolv, which makes dnsmasq" \
+				"ignore resolv-file=/run/xray-dns.conf and leaves the LAN with no upstream"
 		fi
 	done
 fi

@@ -147,12 +147,14 @@ nat_lan usb0 "${USB_ADDR:-}" 255.255.255.0 || RC=1
 
 ## The Xray kill switch, if it is wanted, has to exist from before network.target
 ## - i.e. from here - and not from the moment xray.service happens to start, or
-## the LAN gets a direct window on every boot. xraypolicy owns the rules; this is
-## only the early trigger, and it is a no-op unless XRAY_KILLSWITCH=ON.
+## the LAN gets a direct window on every boot. Same for the LAN's DNS upstream
+## (/run/xray-dns.conf): it has to exist before dnsmasq starts and reads it.
+## xraypolicy owns both; this is only the early trigger, and the kill switch part
+## is a no-op unless XRAY_KILLSWITCH=ON.
 ## The -x test is not paranoia: netpolicy is also installed on boards without the
 ## xray overlay.
 if [ -x /usr/sbin/xraypolicy ]; then
-	/usr/sbin/xraypolicy killswitch || RC=1
+	/usr/sbin/xraypolicy boot || RC=1
 fi
 
 exit ${RC}

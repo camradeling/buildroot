@@ -1,0 +1,21 @@
+[Unit]
+Description=Probe the Xray tunnel and repath the LAN if it is dead
+Documentation=file:/usr/sbin/xray-health
+# Same switch as xray.service: no config, no feature. This one is belt and braces
+# - the unit has no [Install] section, so preset-all ignores it and only
+# xray-health.timer can pull it in - but the condition is what makes "systemctl
+# start xray-health" on an XRAY_CLIENT=OFF board do nothing instead of something.
+ConditionPathExists=/etc/xray/config.json
+# Deliberately no After=xray.service and no Requires=: this is level-triggered. It
+# looks at what is true when it runs and exits, so it does not care whether xray is
+# starting, running or between Restart= attempts, and it must never be able to pull
+# xray in or hold it back.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/xray-health
+# The probe is bounded by nc -w 5 and there are no loops, so anything past this is
+# a wedged nc. A hanging health check must not become the outage.
+TimeoutStartSec=60
+
+# No [Install]: xray-health.timer is the only thing that starts this.
