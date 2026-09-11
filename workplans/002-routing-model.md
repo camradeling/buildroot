@@ -670,9 +670,12 @@ Beyond `config.json` itself:
 | Path | What | Owner |
 |------|------|-------|
 | `/etc/xray/config.json` | the config, **and the gating artifact** | new `0013-xray_client_service.sh`, generated from the `XRAY_CONFIG` share URL |
-| `/etc/systemd/system/xray.service` | daemon; `ConditionPathExists=/etc/xray/config.json`, `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE`, `ExecStartPost=`/`ExecStopPost=` the policy script, `Restart=on-failure` | new `services/xray/` overlay |
-| `/usr/sbin/xraypolicy` | `add`/`del` of the rule set; idempotent via `iptables -C`, tolerant of missing rules on `del`; `conntrack -F` on both | new, sibling of `/usr/sbin/netpolicy` |
-| `/etc/dnsmasq_wlan0.conf`, `/etc/dnsmasq_usb0.conf` | `no-resolv` + `server=127.0.0.1#5353` appended when `XRAY_CLIENT=ON` | base file stays with `0007`/`0010`; `0013` appends (it runs after both, and both rewrite their file from scratch every build) |
+| `/etc/systemd/system/xray.service` | daemon; `ConditionPathExists=/etc/xray/config.json`, `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE`, `ExecStartPost=`/`ExecStopPost=` the policy script, `Restart=always` (see "Hardening" below — `on-failure` misses a clean exit) | new `services/xray/` overlay |
+| `/usr/sbin/xraypolicy` | `add`/`del`/`boot` of the rule set **and of the LAN's DNS upstream**; idempotent via `iptables -C`, tolerant of missing rules on `del`; `conntrack -F` on both | new, sibling of `/usr/sbin/netpolicy` |
+| `/usr/sbin/xray-health` | probes *through* the tunnel once a minute; restarts `xray`, then fails the LAN open, then restores it — see "Hardening" | new, in the same overlay |
+| `/etc/systemd/system/xray-health.{service,timer}` | the timer that runs it; the `.timer` carries the `[Install]` and the same `ConditionPathExists=`, the `.service` has no `[Install]` at all | same overlay |
+| `/run/xray-dns.conf` | the LAN's DNS upstream, one `nameserver` line: the `dns-in` inbound while the tunnel is up, `XRAY_DNS_UPSTREAM` while it is down | written by `xraypolicy`, read by `dnsmasq` |
+| `/etc/dnsmasq_wlan0.conf`, `/etc/dnsmasq_usb0.conf` | `resolv-file=/run/xray-dns.conf` appended when `XRAY_CLIENT=ON` | base file stays with `0007`/`0010`; `0013` appends (it runs after both, and both rewrite their file from scratch every build) |
 | `/etc/systemd/system/modem-time.service`, `/usr/sbin/modem-time` | clock from `AT+CCLK?`; `Before=xray.service` | `quectel_ecm` overlay |
 | `/etc/sysctl.d/30-xray.conf` | pins `net.ipv4.conf.all.rp_filter=2` | new; today the board happens to have `all=0`, `default=2`, which already works — this only stops a future default from breaking the reply path |
 | `/etc/system.vars` | new `XRAY_CLIENT=OFF` line | `system_v2` overlay + `0013`'s `sed` (the `sed` needs the key to pre-exist) |
@@ -693,7 +696,10 @@ export XRAY_CLIENT=ON
 export XRAY_CONFIG=/home/denisov/vpn/laptop-singapore/singbox-reality.txt
 # Everything below has a working default; set only to override
 export XRAY_TPROXY_PORT=12345
-export XRAY_DNS_PORT=5353
+# the DNS inbound's own loopback address, on port 53 (see DNS)
+export XRAY_DNS_ADDR=127.0.0.2
+export XRAY_DNS_UPSTREAM=1.1.1.1
+export XRAY_PROBE_PORT=5301
 export XRAY_LAN_IFACES="usb0 wlan0"
 export XRAY_KILLSWITCH=OFF
 ```
@@ -868,8 +874,9 @@ explicit `-j XRAY`-side exception ahead of the `RETURN`s.
 |---|---|---|
 | boot, `XRAY_CLIENT=ON` | Xray starts, rules go in | `multi-user.target.wants` (from `preset-all`) + `ConditionPathExists=/etc/xray/config.json` + `ExecStartPost=/usr/sbin/xraypolicy add` |
 | boot, `XRAY_CLIENT=OFF` | nothing happens at all | the condition fails; no config file, no rules |
-| `systemctl stop xray` / crash / shutdown | rules come out, LAN falls back to direct NAT via `netpolicy` | `ExecStopPost=/usr/sbin/xraypolicy del` — `ExecStopPost` runs on *every* exit path, including failure |
-| Xray restart (`Restart=on-failure`) | brief direct window, bounded by `RestartSec` | deliberate; see fail-open below |
+| `systemctl stop xray` / crash / shutdown | rules come out, LAN falls back to direct NAT **and to a direct resolver** via `netpolicy`/`xraypolicy del` | `ExecStopPost=/usr/sbin/xraypolicy del` — `ExecStopPost` runs on *every* exit path, including failure |
+| Xray restart (`Restart=always`) | brief direct window, bounded by `RestartSec` | deliberate; see fail-open below |
+| tunnel alive but carrying nothing | probe fails 3× → restart; still failing → rules out, LAN direct; probe answers → rules back | `xray-health` on a 60s timer; see "Hardening" |
 | AP or USB gadget toggled | nothing to do | rules match interface names, inert without an address |
 | uplink change (`wwan0` ↔ `eth0` ↔ `wlan1`) | nothing to do | Xray's outbound follows the metric ladder; the tunnel redials |
 | tunnel up or down | stale flows dropped so clients repath immediately | `conntrack -F` in both `add` and `del` |
@@ -903,10 +910,33 @@ line, so it forwards to `/etc/resolv.conf` (`nameserver 1.1.1.1`) as *locally
 generated* traffic — which `PREROUTING` never sees. On this SIM UDP/53 is one of
 the few things that works, so it would resolve perfectly and quietly, out of band.
 
-Fix without touching the resolver the board itself uses: `no-resolv` +
-`server=127.0.0.1#5353` in both dnsmasq configs, against the `dns-in` inbound
-shown above. Requests to it are ordinary local sockets, so no TPROXY is involved
-on this path, and the board's own lookups keep going to `1.1.1.1` directly.
+Fix without touching the resolver the board itself uses: point both dnsmasq configs
+at the `dns-in` inbound shown above. Requests to it are ordinary local sockets, so
+no TPROXY is involved on this path, and the board's own lookups keep going to
+`1.1.1.1` directly.
+
+**Indirectly, through a file, and not with a `server=` line** — that was the first
+implementation (`no-resolv` + `server=127.0.0.1#5300`) and it is wrong, because the
+upstream has to follow the routing. When Xray dies the rules come out and the LAN
+falls back to direct NAT, but a hard-wired `server=` keeps pointing at an inbound
+that is gone: traffic fails open onto a path that cannot resolve a name. So:
+
+```
+# /etc/dnsmasq_{wlan0,usb0}.conf, appended by 0013
+resolv-file=/run/xray-dns.conf
+# written by xraypolicy: "nameserver 127.0.0.2" on add, "nameserver 1.1.1.1" on del
+```
+
+`dnsmasq` polls a `resolv-file` and re-reads it (plus flushes its cache) on
+`SIGHUP`, which `xraypolicy` sends; it never re-reads its *config* file, which is
+why the upstream has to be expressible as a plain `nameserver` line. That means no
+port, which is why the DNS inbound gets an address of its own (`XRAY_DNS_ADDR`,
+default `127.0.0.2`) on port 53 instead of a port on `127.0.0.1`. `no-resolv` must
+not be present — it makes `dnsmasq` ignore every resolv-file — and `0013` strips it,
+`after-preset-check` rule G refuses a build that still has it.
+
+With `XRAY_KILLSWITCH=ON` the down state writes *no* nameserver at all: a LAN that
+cannot leave the box must not be able to resolve either.
 
 Worth noting what this does *not* fix: a LAN client that ignores the DHCP
 nameserver and talks to `8.8.8.8` itself is still forwarded, so it is caught by
@@ -920,16 +950,24 @@ plain-`resolv.conf` clients, which is most embedded things.
 Same principle as rule F: the failure mode is silent, so check the artifact, not
 the intention.
 
-- `check_feature XRAY_CLIENT "${XRAY_CLIENT:-OFF}" "xray.service" "/etc/xray/config.json"`
-  — covers "ON but no config", "OFF but config still shipped" and "unit's
-  `ConditionPathExists=` points somewhere else".
-- With `XRAY_CLIENT=ON`: `/usr/bin/xray` and `/usr/sbin/xraypolicy` exist.
+- `check_feature XRAY_CLIENT "${XRAY_CLIENT:-OFF}" "xray.service xray-health.timer
+  xray-health.service" "/etc/xray/config.json"` — covers "ON but no config", "OFF
+  but config still shipped" and "one of the three units' `ConditionPathExists=`
+  points somewhere else".
+- With `XRAY_CLIENT=ON`: `/usr/bin/xray`, `/usr/sbin/xraypolicy` and
+  `/usr/sbin/xray-health` exist, and so does an `nc` — without one the probe can
+  never succeed and the health check would restart Xray forever.
+- `xray-health.timer` is linked into `timers.target.wants`. Same silent failure as
+  rule F's device-unit links, and rule A does not walk that directory: without the
+  link the image boots, Xray runs, and nothing ever notices a dead tunnel.
 - `/usr/sbin/ip` is **not** a busybox symlink (`readlink` empty / ELF), because if
   busybox wins that path the policy-routing commands fail silently and, worse,
   `ip route add … table 100` lands in `main`.
 - With `XRAY_CLIENT=ON`: the dnsmasq configs that exist contain
-  `server=127.0.0.1#`, so an appended line lost to a reordering of the createfs
-  scripts is caught at build time instead of as a DNS leak in the field.
+  `resolv-file=/run/xray-dns.conf` and do **not** contain `no-resolv`, so an
+  appended line lost to a reordering of the createfs scripts — or a leftover
+  `no-resolv` that silences the resolv-file — is caught at build time instead of as
+  a DNS leak in the field.
 
 ### Step order
 
@@ -946,8 +984,10 @@ the intention.
    `XRAY_KILLSWITCH=OFF`. Diff the generated `/etc/xray/config.json` against the
    share URL field by field before booting it — a wrong `sid` or a dropped `flow`
    fails as a timeout, with nothing useful in the log.
-7. Only then the dnsmasq `server=` lines.
+7. Only then the dnsmasq `resolv-file=` lines.
 8. Kill switch, if wanted.
+9. Hardening: `Restart=always`, DNS through `/run/xray-dns.conf`, `xray-health`.
+   Added after the first working boot, for the failure modes in "Hardening" below.
 
 Steps 1–2 are the only ones that need a full `linux-rebuild`+image cycle, and
 steps 5–8 are overlay/script-only.
@@ -1134,26 +1174,31 @@ why. What the first boot with `XRAY_CLIENT=ON` actually broke is in
   which the `XRAY` chain's RFC1918 `RETURN`s deliberately keep working. Instead
   `xraypolicy` owns an `XRAYKILL` chain that `RETURN`s for every
   `XRAY_LAN_IFACES` member and rejects the rest, hooked from `FORWARD` per LAN
-  interface. `netpolicy` calls `xraypolicy killswitch` at the end of its run —
-  before `network.target`, so there is no direct window between boot and Xray
-  being up — and it is a no-op unless both `XRAY_KILLSWITCH=ON` and
-  `XRAY_CLIENT=ON` (a kill switch with no Xray to wait for is just a broken LAN).
-  `xraypolicy add` removes it, `del` re-adds it.
-- **`/etc/system.vars` carries four keys, not one**: `XRAY_CLIENT`,
-  `XRAY_TPROXY_PORT`, `XRAY_LAN_IFACES`, `XRAY_KILLSWITCH`. `xraypolicy` needs
-  the last three at runtime, and taking them from the same file `0013` writes is
-  what stops the rule set and the generated `config.json` from disagreeing about
-  the port. `XRAY_CONFIG` still never leaves the build host, and no credential is
-  written anywhere but `/etc/xray/config.json`.
+  interface. `netpolicy` calls `xraypolicy boot` at the end of its run — before
+  `network.target`, so there is no direct window between boot and Xray being up, and
+  so `/run/xray-dns.conf` exists before `dnsmasq` reads it — and the kill switch
+  half is a no-op unless both `XRAY_KILLSWITCH=ON` and `XRAY_CLIENT=ON` (a kill
+  switch with no Xray to wait for is just a broken LAN). `xraypolicy add` removes
+  it, `del` re-adds it.
+- **`/etc/system.vars` carries seven keys, not one**: `XRAY_CLIENT`,
+  `XRAY_TPROXY_PORT`, `XRAY_DNS_ADDR`, `XRAY_DNS_UPSTREAM`, `XRAY_PROBE_PORT`,
+  `XRAY_LAN_IFACES`, `XRAY_KILLSWITCH`. `xraypolicy` and `xray-health` need the rest
+  at runtime, and taking them from the same file `0013` writes is what stops the rule
+  set, the resolv-file and the generated `config.json` from disagreeing about a port
+  or an address. `XRAY_CONFIG` still never leaves the build host, and no credential
+  is written anywhere but `/etc/xray/config.json`.
 - **`0013` renders `config.json` from a heredoc**, not by `sed`-substituting a
   template: same output, one file fewer. It also validates every extracted field
   against `^[A-Za-z0-9._:@%~/+-]+$` before it goes into JSON, rejects a share URL
   whose `security`/`type` is not `reality`/`tcp` (the skeleton cannot express
   anything else), and installs a full xray `config.json` verbatim if that is what
-  `XRAY_CONFIG` points at — in which case it asserts that the file has an inbound
-  on `XRAY_TPROXY_PORT`, so `xraypolicy` cannot end up TPROXY'ing the LAN into
-  nothing. The dnsmasq `server=`/`no-resolv` lines are stripped unconditionally at
-  the top and re-added only when `ON`.
+  `XRAY_CONFIG` points at — in which case it asserts that the file has inbounds on
+  `XRAY_TPROXY_PORT`, on `XRAY_DNS_ADDR` and on `XRAY_PROBE_PORT`, so `xraypolicy`
+  cannot end up TPROXY'ing the LAN into nothing, `dnsmasq` cannot be pointed at a
+  resolver that does not exist, and `xray-health` cannot restart Xray forever over a
+  probe that never had anywhere to go. The dnsmasq lines (`resolv-file=`, and the
+  older `server=`/`no-resolv` pair) are stripped unconditionally at the top and
+  re-added only when `ON`.
 - **`xraypolicy` checks `ip -V` at runtime** on top of the build-time assertion.
   The failure it guards against is the one already measured on this board — a
   busybox `ip` silently dropping `table 100` and installing a black-hole default
@@ -1193,10 +1238,13 @@ as fatal, so the unit restart-looped forever. The LAN had no uplink because of a
 port number, and the plan's own DNS section had picked 5353 precisely because it
 looks like a spare DNS port.
 
-Default is now 5300, and `0013` **fails the build** if `XRAY_DNS_PORT` is 5353,
-naming the reason. `ss -lunp` on the target is the way to check the next one; the
-build cannot see the running system, so a guard on the known collision is all
-there is.
+The immediate fix was to default the port to 5300 and **fail the build** on 5353,
+naming the reason. The hardening pass then removed the port entirely: the DNS
+inbound now listens on `XRAY_DNS_ADDR:53` (default `127.0.0.2`) because `dnsmasq`
+reaches it through a resolv-file, and the build refuses `127.0.0.53`/`127.0.0.54`
+(systemd-resolved's) and any address outside `127/8`. Same lesson, wider guard.
+`ss -lntup` on the target is the way to check the next one; the build cannot see the
+running system, so guards on the known collisions are all there is.
 
 #### 2. `conntrack -F` segfaults: the kernel had no netfilter netlink (fixed)
 
@@ -1250,6 +1298,133 @@ a fallback for firmware without `QLTS`, taken as UTC. The floor also gained a da
 of slack, because a bound tight enough to reject a correct clock is a worse bug
 than the pre-NITZ garbage it exists to reject (`+CCLK: "04/01/01,..."` is still
 rejected — it is 22 years low).
+
+## Hardening: what happens when Xray dies, or stops working without dying
+
+Asked of the working image, answered by reading the units and `systemctl show`
+rather than by guessing. Four gaps, three fixes, all three implemented and measured
+on the board (slot 2).
+
+### The four failure modes, as they were
+
+| Failure | Before | Why |
+|---|---|---|
+| process killed / crashes | recovers in ~5s, LAN direct in the meantime | `ExecStopPost=xraypolicy del` runs on every exit path, `Restart=` brings it back |
+| process exits **0** | never comes back | `Restart=on-failure` does not cover a clean exit, and Xray exits 0 on some fatal conditions |
+| uplink lost / modem cycles | self-healing, nothing to do | Xray dials per connection; no rule names an uplink |
+| **process alive, tunnel dead** | **undetected, forever** | `WatchdogUSec=0`, no health check, no `routing` block; a blackholed LAN while a working direct path sits next to it |
+| DNS, whenever the tunnel is down | **failed closed** | `no-resolv` + a single `server=127.0.0.1#5300`: traffic failed open onto a path that could not resolve a name |
+
+The last two are the interesting ones. A restart loop on a permanently broken Xray
+also flaps forever rather than giving up — `RestartSec=5s` against
+`StartLimitBurst=5`/`StartLimitIntervalUSec=10s` never trips the limit, and the
+restart counter was observed at 13 during the 5353 episode. That is the right
+behaviour here (each attempt runs the whole `del`/`add` cycle, so it either recovers
+or fails open) but it is worth knowing it is unbounded.
+
+### 1. `Restart=always`
+
+One line. `on-failure` leaves a clean-exit death dead forever, and "the proxy
+stopped" is a LAN with no uplink whatever the exit code was.
+
+### 2. DNS follows the routing
+
+`resolv-file=/run/xray-dns.conf` + `xraypolicy` writing it — the design is in the
+DNS section above. The point of the change: "fail open" now means open for names as
+well as for packets.
+
+### 3. `xray-health`, a probe *through* the tunnel
+
+`config.json` gained a third `dokodemo-door` inbound, `127.0.0.1:5301` with a fixed
+destination of `1.1.1.1:80`, and `/usr/sbin/xray-health` runs once a minute from
+`xray-health.timer`:
+
+```sh
+printf 'HEAD / HTTP/1.0\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n' \
+        | nc -w 5 127.0.0.1 5301 | grep -q '^HTTP/1\.[01] '
+```
+
+A `nc -z` on that port proves nothing — Xray accepts the local socket before it
+dials anything — so the probe has to be a request with a reply, and one HTTP `HEAD`
+exercises the inbound, the outbound, the REALITY handshake, the server and its exit.
+Cloudflare answers `:80` with a 301, which is proof enough. `nc` is GNU netcat 0.7.1
+from `BR2_PACKAGE_NETCAT`; busybox has no `nc` applet in this defconfig, so rule G
+checks for it.
+
+It is a reconciler, not a one-shot, with its state in `/run/xray-health/`:
+
+- **preconditions** — `XRAY_CLIENT=ON`, `xray.service` active, and a default route
+  present. The last one matters: without it a modem that lost its carrier looks
+  exactly like a dead server, and the box would restart Xray every five minutes
+  until signal came back. `dhclient` withdrawing the default route is the signal.
+- 3 consecutive failures (≈3 min) → **restart `xray.service`**, at most once per
+  `COOLDOWN` (300s), because a restart drops every live connection through the
+  tunnel.
+- still failing after that restart → **`xraypolicy del`**: the TPROXY rules come
+  out and the LAN uses the direct path that demonstrably works. With
+  `XRAY_KILLSWITCH=ON` the same call closes the LAN instead, which is the same
+  promise kept the other way.
+- probe answers again → **`xraypolicy add`**, and the LAN goes back on the tunnel.
+- while it is down, a restart is retried every `COOLDOWN`; if the state is already
+  `down` the rules are taken out again immediately after the restart, so a
+  server that is unreachable for an hour does not blackhole the LAN for three
+  minutes out of every five.
+
+Thresholds are script constants overridable from the environment
+(`XRAY_HEALTH_FAILS`, `XRAY_HEALTH_COOLDOWN`); they are deliberately *not*
+`/etc/system.vars` keys, because nothing else needs to agree with them. A successful
+probe logs nothing — a per-minute timer that logs is a journal that nobody reads.
+
+### Measured on the board
+
+Deployed to slot 2. The tunnel was faked dead with
+`iptables -I OUTPUT -d <server> -p tcp --dport 443 -j REJECT`, which leaves the
+process healthy and every connection through it broken — exactly the mode nothing
+used to notice — and `xray-health` was then run by hand with its real thresholds
+(timer stopped, to control the sequence):
+
+```
+xray-health: no HTTP reply through the tunnel (1/3)
+xray-health: no HTTP reply through the tunnel (2/3)
+xray-health: no HTTP reply through the tunnel after 3 probes, restarting xray.service
+xraypolicy:  LAN DNS upstream: 1.1.1.1          <- ExecStopPost
+xraypolicy:  TPROXY policy removed
+xraypolicy:  LAN DNS upstream: 127.0.0.2        <- ExecStartPost, 1s later
+xraypolicy:  LAN (usb0 wlan0) is TPROXY'd to 127.0.0.1:12345 via fwmark 0x1/table 100
+xray-health: no HTTP reply through the tunnel (1/3)
+xray-health: no HTTP reply through the tunnel (2/3)
+xray-health: the tunnel is still dead after a restart, taking the TPROXY rules out so the LAN uses the direct path
+xraypolicy:  LAN DNS upstream: 1.1.1.1
+xraypolicy:  TPROXY policy removed
+xray-health: the tunnel answers again after 3 failed probes, putting the LAN back on it
+xraypolicy:  LAN DNS upstream: 127.0.0.2
+xraypolicy:  LAN (usb0 wlan0) is TPROXY'd to 127.0.0.1:12345 via fwmark 0x1/table 100
+```
+
+- After the escalation: `mangle PREROUTING` empty, no `fwmark` rule, `/run/xray-dns.conf`
+  = `nameserver 1.1.1.1` — and `nslookup debian.org 192.168.100.1` from a LAN client
+  answered. That is the fix for the old DNS behaviour, verified with a name that had
+  never been cached.
+- After the block was removed and one more probe ran: rules back, fwmark rule back,
+  `nameserver 127.0.0.2`, state `up`.
+- Steady state: `xray` listens on `*:12345`, `127.0.0.2:53` and `127.0.0.1:5301`;
+  the probe returns `HTTP/1.1 301 Moved Permanently`; `xray-health.service`
+  `Result=success`, `/run/xray-health/fails` = 0; `xray-health.timer` next elapse
+  60s out with `AccuracySec=5s`.
+- DNS through the tunnel, re-verified after the move to `127.0.0.2:53`: three
+  `nslookup`s from a LAN client all answered while `tcpdump -ni wwan0 'port 53'`
+  captured **zero** packets.
+- `Restart=always` in effect: `kill -9 $(pidof xray)` → within 2s the rules were out
+  and the resolv-file said `1.1.1.1`; 8s later `active`, `NRestarts=1`, rules back,
+  `nameserver 127.0.0.2`, probe answering. No cores, and `journalctl -b | grep -c
+  'segfault\|core dumped'` = 0.
+- `after-preset-check` passed with the three new assertions, and `preset-all` created
+  `timers.target.wants/xray-health.timer` as designed.
+
+Not covered by this: a `dnsmasq` that dies (its own `Restart=` handles that), and the
+kill-switch interaction — with `XRAY_KILLSWITCH=ON`, `xray-health`'s escalation
+closes the LAN instead of opening it, which is intended but has never been run on
+hardware because the switch has never been on.
 
 ## Verification
 

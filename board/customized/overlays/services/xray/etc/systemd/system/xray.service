@@ -27,7 +27,12 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 # XRAY_KILLSWITCH in netpolicy for the other choice.
 ExecStartPost=/usr/sbin/xraypolicy add
 ExecStopPost=/usr/sbin/xraypolicy del
-Restart=on-failure
+# always, not on-failure: a proxy that has stopped is a LAN with no uplink whatever
+# its exit code was, and xray does exit 0 on some fatal conditions (a config it
+# will not parse, a "Failed to start" it treats as clean). on-failure would leave
+# those dead forever. The stop/start pair below runs on every one of these
+# restarts, so each attempt either recovers the tunnel or fails open again.
+Restart=always
 RestartSec=5s
 
 # No ordering against modem-time.service, which sets the clock from the modem and

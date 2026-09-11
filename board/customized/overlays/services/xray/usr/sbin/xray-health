@@ -1,0 +1,152 @@
+#!/bin/sh
+# Is the tunnel actually carrying traffic? Nothing else on this box knows.
+#
+# A dead xray process is systemd's problem (Restart=always) and a dead uplink is
+# self-healing (xray dials per connection). The failure this exists for is the one
+# in between: the process is alive, its inbounds accept, its rules are installed,
+# and every connection through it dies - a server that is down, blocked, or whose
+# REALITY handshake stopped being accepted. From the LAN that is a blackhole, and
+# from the box it is indistinguishable from a working proxy: no watchdog fires, no
+# unit fails, nothing appears in the log.
+#
+# So probe the only thing that can answer: a connection through xray to the
+# internet. config.json carries a dokodemo-door inbound on 127.0.0.1:${PROBE_PORT}
+# whose fixed destination is 1.1.1.1:80, so one HTTP request there exercises the
+# whole path - inbound, outbound, REALITY handshake, server, exit. A bare "nc -z"
+# would not: xray accepts the local socket before it dials anything, so the connect
+# succeeds no matter how broken the tunnel is.
+#
+# Two escalations, in this order:
+#   1. restart xray.service - the only recovery for a wedged process, and it runs
+#      the whole del/add cycle, so it either comes back working or falls open.
+#   2. take the TPROXY rules out (xraypolicy del) and leave them out while the
+#      probe keeps failing, so the LAN uses the direct path that does work. With
+#      XRAY_KILLSWITCH=ON that closes the LAN instead, which is the same promise.
+# When the probe answers again, the rules go back (xraypolicy add). This is a
+# reconciler, not a one-shot: the state file is what keeps it from re-running
+# either action every tick.
+#
+# Run by xray-health.timer, every 60s.
+#
+# Usage: xray-health
+
+set -u
+
+. /etc/system.vars
+
+UNIT=xray.service
+PROBE_PORT=${XRAY_PROBE_PORT:-5301}
+PROBE_TIMEOUT=5
+
+## Consecutive failures before anything is touched. One failed probe is a packet
+## loss report, not a diagnosis: 3 x 60s means a real outage is acted on in about
+## three minutes and a lossy minute is ignored.
+THRESHOLD=${XRAY_HEALTH_FAILS:-3}
+## And no more than one restart per this many seconds. A restart drops every live
+## connection through the tunnel, so a server that is down for an hour must not
+## turn into a restart every three minutes.
+COOLDOWN=${XRAY_HEALTH_COOLDOWN:-300}
+
+## /run, so a reboot starts from a clean slate - which is right, because the rules
+## and the routing start from a clean slate too.
+STATE_DIR=/run/xray-health
+FAILS_FILE=${STATE_DIR}/fails
+STATE_FILE=${STATE_DIR}/state
+RESTART_FILE=${STATE_DIR}/last-restart
+
+log()
+{
+	logger -t xray-health "$*"
+}
+
+read_num()
+{
+	_v=$(cat "${1}" 2>/dev/null)
+	case "${_v}" in
+	''|*[!0-9]*)	echo 0 ;;
+	*)		echo "${_v}" ;;
+	esac
+}
+
+## HTTP/1.0 with no keepalive, so the server closes and nc returns instead of
+## sitting out its timeout. Cloudflare answers 1.1.1.1:80 with a 301 to https,
+## which is a perfectly good proof that the tunnel works.
+probe()
+{
+	printf 'HEAD / HTTP/1.0\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n' \
+		| nc -w ${PROBE_TIMEOUT} 127.0.0.1 ${PROBE_PORT} 2>/dev/null \
+		| grep -q '^HTTP/1\.[01] '
+}
+
+#####################################################################
+## preconditions: things that are not the tunnel's fault
+#####################################################################
+## Nothing to probe and nothing to restart.
+[ "${XRAY_CLIENT:-OFF}" = "ON" ] || exit 0
+
+## Not running: either it is between Restart=always attempts or it was stopped on
+## purpose. Both are already the right state - the rules came out with it - and
+## restarting it here would fight whoever stopped it.
+systemctl is-active --quiet ${UNIT} || exit 0
+
+## No uplink at all. Without this a modem that lost its carrier looks exactly like
+## a dead server, and the box would restart xray every five minutes for as long as
+## it takes to get signal back. dhclient withdraws the default route when the lease
+## goes, which is the signal.
+if ! ip route show default 2>/dev/null | grep -q .; then
+	exit 0
+fi
+
+#####################################################################
+mkdir -p ${STATE_DIR} 2>/dev/null
+
+FAILS=$(read_num ${FAILS_FILE})
+STATE=$(cat ${STATE_FILE} 2>/dev/null)
+[ "${STATE}" = "down" ] || STATE=up
+
+if probe; then
+	echo 0 > ${FAILS_FILE}
+	if [ "${STATE}" = "down" ]; then
+		log "the tunnel answers again after ${FAILS} failed probes, putting the LAN back on it"
+		/usr/sbin/xraypolicy add
+		echo up > ${STATE_FILE}
+	fi
+	exit 0
+fi
+
+FAILS=$((FAILS + 1))
+echo ${FAILS} > ${FAILS_FILE}
+
+if [ ${FAILS} -lt ${THRESHOLD} ]; then
+	log "no HTTP reply through the tunnel (${FAILS}/${THRESHOLD})"
+	exit 0
+fi
+
+NOW=$(date +%s)
+LAST=$(read_num ${RESTART_FILE})
+
+if [ $((NOW - LAST)) -ge ${COOLDOWN} ]; then
+	log "no HTTP reply through the tunnel after ${FAILS} probes, restarting ${UNIT}"
+	echo ${NOW} > ${RESTART_FILE}
+	## Give the new process a full THRESHOLD of ticks before it is judged.
+	echo 0 > ${FAILS_FILE}
+	systemctl restart ${UNIT}
+	## The restart's ExecStartPost put the rules back. If the tunnel was already
+	## known not to work, take them out again straight away rather than blackhole
+	## the LAN for another three minutes on every restart attempt.
+	if [ "${STATE}" = "down" ]; then
+		/usr/sbin/xraypolicy del
+	fi
+	exit 0
+fi
+
+if [ "${STATE}" = "up" ]; then
+	log "the tunnel is still dead after a restart, taking the TPROXY rules out" \
+		"so the LAN uses the direct path"
+	/usr/sbin/xraypolicy del
+	echo down > ${STATE_FILE}
+	exit 0
+fi
+
+log "the tunnel is still dead (${FAILS} consecutive probes), the LAN stays off it"
+exit 0
