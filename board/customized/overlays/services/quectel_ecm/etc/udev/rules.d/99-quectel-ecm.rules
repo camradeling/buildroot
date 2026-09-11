@@ -6,15 +6,18 @@
 # modem has to be reset afterwards and udev must not be blocked that long.
 ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm.service"
 
-# Once the modem is in ECM mode its network function shows up as a separate net
-# device (renamed to wwan0 by 79-quectel-ecm-name.rules). Nothing else in the
-# image would configure it, so start the DHCP client from here.
+# The DHCP client for the ECM net device is deliberately *not* started from here.
+# There used to be a second rule:
 #
-# This only has to fire once, when the device first appears: quectel-ecm-up.service
-# is BindsTo= the wwan0 device unit with Restart=always, so it survives the modem
-# re-enumerating and stops when the modem is really unplugged. It used to be a
-# oneshot that this rule had to re-trigger on every re-enumeration, which does not
-# work - SYSTEMD_WANTS only creates a job when the device unit *transitions* into
-# active, and it does not transition across a modem reset. See the unit for the
-# full story.
-SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
+#   SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", \
+#     TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
+#
+# and it never worked on this board, because 79-quectel-ecm-name.rules renames the
+# interface: the rename produces a second uevent with ACTION=move, the rule does
+# not match it, and the udev database entry is rewritten without SYSTEMD_WANTS. So
+# wwan0 came up only after a manual "systemctl start quectel-ecm-up.service".
+# quectel-ecm-up.service is now WantedBy= the wwan0 device unit instead, which is
+# level-triggered and needs no property to survive. See that unit for the evidence.
+#
+# The mode switch above stays on udev because there is no device unit for "a
+# Quectel appeared on USB" to hang it off.
