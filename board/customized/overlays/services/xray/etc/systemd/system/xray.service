@@ -1,0 +1,42 @@
+[Unit]
+Description=Xray client, TPROXY uplink for the LAN
+Documentation=file:/usr/sbin/xraypolicy
+# The config file is the switch. preset-all enables everything with an [Install]
+# section (it runs after the createfs scripts), so XRAY_CLIENT=OFF works by
+# 0013-xray_client_service.sh deleting this file, not by disabling the unit.
+# See CLAUDE.md, "Optional services".
+ConditionPathExists=/etc/xray/config.json
+# netpolicy owns the NAT rules the LAN falls back to whenever this daemon is not
+# running, so let it install them first - the two rule sets are independent, but
+# "NAT before TPROXY" is the order that never has a window with neither.
+After=network.target netpolicy.service
+Wants=netpolicy.service
+
+[Service]
+Type=simple
+# -c, not -config: "xray run [-c config.json] [-confdir dir]" is what the binary
+# documents.
+ExecStart=/usr/bin/xray run -c /etc/xray/config.json
+# The tproxy inbound needs IP_TRANSPARENT on its listening socket, which is
+# CAP_NET_ADMIN. Redundant while this runs as root, and deliberately spelled out
+# anyway: it is the one line that has to survive someone adding User=xray.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+# The daemon owns its rules. ExecStopPost runs on every exit path - clean stop,
+# crash, shutdown - so a dead Xray never leaves the LAN's traffic being TPROXY'd
+# into a port nothing listens on. It falls back to direct NAT instead; see
+# XRAY_KILLSWITCH in netpolicy for the other choice.
+ExecStartPost=/usr/sbin/xraypolicy add
+ExecStopPost=/usr/sbin/xraypolicy del
+Restart=on-failure
+RestartSec=5s
+
+# No ordering against modem-time.service, which sets the clock from the modem and
+# which REALITY needs to be right (the handshake embeds a client timestamp).
+# modem-time is pulled in by the wwan0 device unit, so it is usually not in the
+# boot transaction at all and Before=/After= would apply only sometimes - and
+# when it did apply it could hold this unit for the modem-time timeout. Xray does
+# not need a correct clock to start: it fails handshakes until the clock jumps,
+# then works, with no restart needed.
+
+[Install]
+WantedBy=multi-user.target

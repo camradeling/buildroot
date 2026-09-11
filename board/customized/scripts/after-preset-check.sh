@@ -17,7 +17,9 @@
 # images built with VPN_CLIENT=OFF / WIFI_CLIENT=OFF. Rules D to F cover the other
 # ways a config can rot: files that used to be installed and no longer should be,
 # files that have to be present for something to have one owner, and a unit that
-# is enabled somewhere other than multi-user.target.wants.
+# is enabled somewhere other than multi-user.target.wants. Rule G covers the
+# pieces of the Xray uplink whose absence is invisible until a LAN client tries to
+# reach the internet.
 #
 # Runs once per filesystem type (ext2 and tar here), on a throwaway copy of
 # target/ that is deleted afterwards, so it must stay read-only - it is.
@@ -205,7 +207,9 @@ check_feature USB_RNDIS   "${USB_NET_STATE}"     "dnsmasq_usb0.service" \
 check_feature VPN_CLIENT  "${VPN_CLIENT:-OFF}"   "openvpn@client.service" \
 	"/etc/openvpn/client.conf /etc/openvpn/configs/client.conf"
 check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
-	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh"
+	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service"
+check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service" \
+	"/etc/xray/config.json"
 
 ## openvpn@client.service is the one gated unit preset-all does not manage
 ## (openvpn@.service is a real template), so here presence in .wants is meaningful
@@ -257,12 +261,57 @@ done
 ## is exactly the failure this replaced and it took a live board to spot. So check
 ## the link, not the [Install] line.
 if [[ "${QUECTEL_ECM:-OFF}" == "ON" ]]; then
-	QECM_WANTS="${TARGET_DIR}/etc/systemd/system/sys-subsystem-net-devices-wwan0.device.wants/quectel-ecm-up.service"
-	if [[ ! -L "${QECM_WANTS}" ]]; then
+	QECM_WANTS_DIR="${TARGET_DIR}/etc/systemd/system/sys-subsystem-net-devices-wwan0.device.wants"
+	if [[ ! -L "${QECM_WANTS_DIR}/quectel-ecm-up.service" ]]; then
 		fail "QUECTEL_ECM=ON but quectel-ecm-up.service is not linked into" \
 			"sys-subsystem-net-devices-wwan0.device.wants, so nothing would" \
 			"start dhclient when wwan0 appears"
 	fi
+	## Same shape, same silent failure: without this link the board runs with a
+	## clock two years in the past, which breaks every TLS handshake including
+	## Xray's REALITY one (it embeds a client timestamp).
+	if [[ ! -L "${QECM_WANTS_DIR}/modem-time.service" ]]; then
+		fail "QUECTEL_ECM=ON but modem-time.service is not linked into" \
+			"sys-subsystem-net-devices-wwan0.device.wants, so nothing would" \
+			"set the clock from the modem"
+	fi
+fi
+
+## G. The Xray uplink. check_feature above covers the config file and the unit's
+## condition; these are the pieces whose absence shows up only as "the LAN has no
+## internet", with the rules installed and nothing behind them.
+if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
+	for path in /usr/bin/xray /usr/sbin/xraypolicy; do
+		if [[ ! -e "${TARGET_DIR}${path}" ]]; then
+			fail "XRAY_CLIENT=ON but ${path} is missing from the image"
+		fi
+	done
+
+	## Policy routing is the one thing busybox's ip applet cannot do, and it does
+	## not fail loudly: it has no "rule" command at all, and it *silently ignores*
+	## "table 100" on a route add. Measured on the live board - "ip route add local
+	## default dev lo table 100" installed a black-hole default route in the main
+	## table and took the box off the network. So iproute2 has to own /usr/sbin/ip.
+	IP_BIN="${TARGET_DIR}/usr/sbin/ip"
+	if [[ -L "${IP_BIN}" ]]; then
+		fail "/usr/sbin/ip is a symlink to $(readlink "${IP_BIN}") - with busybox on" \
+			"that path xraypolicy's ip rule/ip route commands fail silently and" \
+			"'table 100' lands in the main routing table"
+	elif [[ ! -f "${IP_BIN}" ]]; then
+		fail "XRAY_CLIENT=ON but /usr/sbin/ip is missing (BR2_PACKAGE_IPROUTE2=y?)"
+	fi
+
+	## The dnsmasq configs that exist must forward to the DNS inbound. 0013
+	## appends the line; if the createfs scripts are ever reordered so that 0007
+	## or 0010 rewrites the file afterwards, this catches it at build time instead
+	## of as a DNS leak in the field.
+	for path in /etc/dnsmasq_usb0.conf /etc/dnsmasq_wlan0.conf; do
+		[[ -f "${TARGET_DIR}${path}" ]] || continue
+		if ! grep -q '^server=127\.0\.0\.1#' "${TARGET_DIR}${path}"; then
+			fail "XRAY_CLIENT=ON but ${path} does not forward to the Xray DNS" \
+				"inbound, so LAN clients would resolve around the tunnel"
+		fi
+	done
 fi
 
 if [[ ${RC} -eq 0 ]]; then

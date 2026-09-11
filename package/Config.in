@@ -2705,6 +2705,7 @@ endif
 	source "package/wpan-tools/Config.in"
 	source "package/xinetd/Config.in"
 	source "package/xl2tp/Config.in"
+	source "package/xray/Config.in"
 	source "package/xtables-addons/Config.in"
 	source "package/zabbix/Config.in"
 	source "package/zeek/Config.in"
