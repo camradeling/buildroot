@@ -21,6 +21,9 @@ define SERIAL_MUX_INSTALL_INIT_SYSTEMD
 	$(if $(BR2_PACKAGE_SERIAL_MUX_ENABLE_MCU),\
 		ln -sf ../serial_mux@.service \
 			$(TARGET_DIR)/usr/lib/systemd/system/multi-user.target.wants/serial_mux@mcu.service)
+	$(if $(BR2_PACKAGE_SERIAL_MUX_ENABLE_SOLANA),\
+		ln -sf ../serial_mux@.service \
+			$(TARGET_DIR)/usr/lib/systemd/system/multi-user.target.wants/serial_mux@solana.service)
 endef
 
 $(eval $(cmake-package))

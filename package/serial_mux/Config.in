@@ -18,4 +18,14 @@ config BR2_PACKAGE_SERIAL_MUX_ENABLE_MCU
 	help
 	  Enable the MCU serial mux instance at boot.
 
+config BR2_PACKAGE_SERIAL_MUX_ENABLE_SOLANA
+	bool "Enable serial_mux@solana service"
+	help
+	  Enable the Solana ISP serial mux instance at boot.
+
+	  Off by default: the instance needs a [solana] section in
+	  /etc/serial_mux.ini, which only the testbot4 device overlay
+	  ships. Without it serial_mux_run.sh exits with an error and
+	  the unit ends up failed.
+
 endif
