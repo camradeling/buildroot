@@ -2,11 +2,17 @@
 # Deploy to /etc/udev/rules.d/ on the voodoo board
 #
 # Creates stable symlinks regardless of enumeration order:
-#   /dev/ttyISP -> ISP Linux console (FTDI FT2232 channel B)
-#   /dev/ttyMCU -> MCU RTOS console (Prolific composite interface 2)
+#   /dev/ttyISP       -> Lory ISP Linux console (FTDI FT2232 channel B)
+#   /dev/ttyMCU       -> Lory MCU RTOS console (Prolific composite interface 2)
+#   /dev/ttySolanaISP -> Solana ISP console (PL2303 UART bridge on the debug board)
 
-# ISP console (FTDI FT2232 channel B, interface 1)
+# Lory ISP console (FTDI FT2232 channel B, interface 1)
 SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="0403", ENV{ID_MODEL_ID}=="6010", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="ttyISP"
 
-# MCU console (Prolific, interface 2)
+# Lory MCU console (Prolific PL2523 composite, interface 2)
 SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="067b", ENV{ID_MODEL_ID}=="2543", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="ttyMCU"
+
+# Solana ISP console (Prolific PL2303 / ATEN Serial Bridge on the debug board).
+# Single-port adapter: interface 0 is its only tty. PID 23a3 keeps it distinct
+# from the PL2523 above.
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="067b", ENV{ID_MODEL_ID}=="23a3", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="ttySolanaISP"
