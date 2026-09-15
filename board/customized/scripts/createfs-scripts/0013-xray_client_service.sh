@@ -273,9 +273,32 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
 	## outbound has no health notion, xray's local sockets are accepted before it
 	## dials anything, and the box's own traffic never goes through the tunnel.
 	##
-	## Sniffing with destOverride makes the tunnel carry hostnames instead of the
-	## IP the client resolved, which keeps SNI consistent with the request and
-	## makes the server's DNS view the authoritative one.
+	## Sniffing is routeOnly, i.e. the sniffed hostname is available for routing
+	## decisions but the destination stays the address the client actually dialled.
+	##
+	## It used to be a plain destOverride, on the reasoning that carrying hostnames
+	## instead of IPs keeps SNI consistent with the request and makes the server's
+	## DNS view authoritative. That reasoning does not hold here and the setting
+	## broke real traffic:
+	##
+	##   - It is redundant. The LAN's DNS already resolves through the tunnel (step
+	##     6 points the resolvers at dns-in), and a client that ignores the resolver
+	##     and hardcodes its own is still TPROXY'd, so the exit's DNS view is
+	##     already the one the LAN gets. Measured: answers are byte-identical
+	##     resolved directly and through the tunnel.
+	##   - It is actively wrong for any peer that is handed a session-pinned
+	##     address out of band. destOverride throws that address away and reconnects
+	##     to whatever the sniffed name resolves to *from the exit*, which for a
+	##     pool of per-session servers is a different member that holds no session
+	##     for this client. It answers a bare TLS probe perfectly and then closes on
+	##     the real client, so it looks like a network fault and is not one.
+	##
+	## That is not hypothetical: Arlo cameras on the AP could never start a stream.
+	## They are given a media relay IP in-band (no DNS query for it at all) and
+	## upload to it over TCP/443; destOverride redirected them to a different
+	## instance of the same relay pool and the upload was silently closed every
+	## time. Demonstrated directly - dialling an IP with an unrelated SNI landed on
+	## the SNI's host with destOverride on, and on the requested IP with routeOnly.
 	##
 	## sockopt.mark is the convention every TPROXY recipe carries. With this
 	## PREROUTING-only rule set it is not load-bearing: Xray's own traffic is
@@ -290,7 +313,7 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
     { "tag": "tproxy", "listen": "0.0.0.0", "port": ${TPROXY_PORT}, "protocol": "dokodemo-door",
       "settings": { "network": "tcp,udp", "followRedirect": true },
       "streamSettings": { "sockopt": { "tproxy": "tproxy", "mark": 255 } },
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] } },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "routeOnly": true } },
     { "tag": "dns-in", "listen": "${DNS_ADDR}", "port": 53, "protocol": "dokodemo-door",
       "settings": { "network": "tcp,udp", "address": "${DNS_UPSTREAM}", "port": 53 } },
     { "tag": "probe", "listen": "127.0.0.1", "port": ${PROBE_PORT}, "protocol": "dokodemo-door",

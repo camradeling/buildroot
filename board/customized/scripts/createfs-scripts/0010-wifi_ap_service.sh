@@ -4,6 +4,19 @@ source ${PWD}/board/customized/scripts/functions.inc
 
 TARGET_DIR=${1}
 
+## Set key=value in hostapd.conf whether or not the key is already there. The
+## previous "sed /^channel=/a" idiom only ever appended, so it silently did
+## nothing when the key existed and left the key absent when the anchor moved.
+set_hostapd_var()
+{
+	local _key=$1 _val=$2
+	if grep -qE "^${_key}=" ${HOSTAPD_CONF}; then
+		sed -i -E "s/^${_key}=.*/${_key}=${_val}/" ${HOSTAPD_CONF}
+	else
+		echo "${_key}=${_val}" >> ${HOSTAPD_CONF}
+	fi
+}
+
 ## start
 sed -i -E "s/export WIFI_AP=.*/export WIFI_AP=${WIFI_AP}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "WIFI_AP=${WIFI_AP}"
@@ -36,11 +49,21 @@ if [[ -f "${HOSTAPD_CONF}" ]] && [[ ! -z "${WIFI_AP_SSID}" ]]; then
 	if [[ ! -z "${WIFI_AP_CHANNEL}" ]]; then
 		sed -i -E "s/^channel=.*/channel=${WIFI_AP_CHANNEL}/g" ${HOSTAPD_CONF}
 		if [[ ${WIFI_AP_CHANNEL} -gt 14 ]]; then
-			sed -i -E '/^hw_mode=/d' ${HOSTAPD_CONF}
-			sed -i -E "/^channel=/a hw_mode=a" ${HOSTAPD_CONF}
+			HOSTAPD_HW_MODE=a
+		else
+			HOSTAPD_HW_MODE=g
 		fi
-		print_green "WIFI_AP_CHANNEL=${WIFI_AP_CHANNEL}"
+		set_hostapd_var hw_mode "${HOSTAPD_HW_MODE}"
+		print_green "WIFI_AP_CHANNEL=${WIFI_AP_CHANNEL} hw_mode=${HOSTAPD_HW_MODE}"
 	fi
+	## Assert, do not assume. A missing mode line fails nothing and logs nothing -
+	## hostapd just falls back to hw_mode=b/ieee80211n=0 and advertises 11b rates.
+	## Keep these unconditional so the advertised capabilities stay honest and the
+	## config behaves the same on a driver that actually enforces them. Note this
+	## did NOT change measured throughput on the H618 board, whose driver
+	## negotiates HT MCS 7 either way; see the comment in hostapd.conf.
+	set_hostapd_var ieee80211n 1
+	set_hostapd_var wmm_enabled 1
 	if [[ "${WIFI_AP_BSS_TRANSITION:-OFF}" == "ON" ]]; then
 		sed -i -E "s/^bss_transition=.*/bss_transition=1/g" ${HOSTAPD_CONF}
 		print_green "WIFI_AP_BSS_TRANSITION=ON"
