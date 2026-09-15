@@ -234,6 +234,49 @@ vless://*)
 				"which is what xray-health probes - give it a dokodemo-door inbound on" \
 				"127.0.0.1:${PROBE_PORT} forwarding to 1.1.1.1:80"
 		fi
+		## Warn, deliberately do NOT fail. A verbatim config is someone's considered
+		## artefact and this build has no standing to veto what is in it - the three
+		## checks above are different, because without those inbounds the image is
+		## structurally broken (no LAN uplink, no DNS, a health check that
+		## restart-loops xray forever). This one is a judgement call that belongs to
+		## whoever wrote the config.
+		##
+		## It is still worth a banner, because it is the setting in an xray config
+		## most likely to break real traffic while looking like someone else's fault.
+		## destOverride replaces each connection's destination with the hostname
+		## sniffed from the client, throwing away the address the client actually
+		## dialled. Any peer handed a session-pinned address out of band - a media
+		## relay, a sticky pool member - is silently reconnected to a different host
+		## that holds no session for it. The victim gets a clean TCP and TLS
+		## handshake and then silence, i.e. a network fault that is not one. That is
+		## not hypothetical; see the comment above the generated config below for the
+		## Arlo cameras this cost days on.
+		##
+		## Counted per block, not per file, because a config may have several
+		## sniffing inbounds and only some of them routeOnly. Whitespace is stripped
+		## first since a hand-written config is formatted however its author liked.
+		## A block with "enabled": false would also trip this, which is why the
+		## message states what was matched rather than asserting an effect.
+		XRAY_FLAT=$(tr -d ' \t\n' < "${XRAY_CONF}")
+		N_OVERRIDE=$(grep -o '"destOverride"' <<< "${XRAY_FLAT}" | wc -l)
+		N_ROUTEONLY=$(grep -o '"routeOnly":true' <<< "${XRAY_FLAT}" | wc -l)
+		if [[ ${N_OVERRIDE} -gt 0 ]] && [[ ${N_ROUTEONLY} -lt ${N_OVERRIDE} ]] \
+			&& grep -q '"enabled":true' <<< "${XRAY_FLAT}"; then
+			print_yellow "##############################################################"
+			print_yellow "WARNING: sniffing destOverride without routeOnly"
+			print_yellow "  ${XRAY_CONFIG}"
+			print_yellow "  has ${N_OVERRIDE} \"destOverride\" block(s), ${N_ROUTEONLY} of them \"routeOnly\": true."
+			print_yellow "  xray will REPLACE the destination of a sniffed connection with"
+			print_yellow "  the hostname in its SNI/Host header and re-resolve it at the"
+			print_yellow "  exit, discarding the address the client dialled. A peer that"
+			print_yellow "  was given a session-pinned address out of band then lands on"
+			print_yellow "  the wrong host and its connection dies after a successful"
+			print_yellow "  handshake, which reads as a network fault and is not one."
+			print_yellow "  Add \"routeOnly\": true to the sniffing block(s) unless every"
+			print_yellow "  destination on this LAN is genuinely name-addressed."
+			print_yellow "  Building anyway: this is your config, not the build's."
+			print_yellow "##############################################################"
+		fi
 		print_green "INFO: installed ${XRAY_CONFIG} verbatim as /etc/xray/config.json"
 		XRAY_VERBATIM=ON
 	else

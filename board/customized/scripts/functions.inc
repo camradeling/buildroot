@@ -249,6 +249,16 @@ function print_blue()
 	echo -e "${BBlue}${text}${NORMAL}"
 }
 
+## For the middle case the other three do not cover: the build is going ahead, but
+## something in it is likely wrong and nobody will connect the symptom back to it
+## later. print_red is already used for plain INFO lines in these scripts, so red
+## cannot mean "look at this" any more - hence a colour of its own.
+function print_yellow()
+{
+	text=$*
+	echo -e "${BYellow}${text}${NORMAL}"
+}
+
 function copy_file()
 {
 	src=$1
