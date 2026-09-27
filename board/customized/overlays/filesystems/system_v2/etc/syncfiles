@@ -1,7 +1,5 @@
-dnsmasq.conf
 hostapd.conf
 hostname
-ifplugd.vars
 machine-id
 network
 openvpn

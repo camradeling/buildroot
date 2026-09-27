@@ -70,7 +70,7 @@ if [[ -f "${HOSTAPD_CONF}" ]] && [[ ! -z "${WIFI_AP_SSID}" ]]; then
 	fi
 fi
 
-## patch dnsmasq.conf dhcp-range based on WIFI_AP_ADDR/WIFI_AP_NETMASK
+## patch dnsmasq_wlan0.conf dhcp-range based on WIFI_AP_ADDR/WIFI_AP_NETMASK
 DNSMASQ_CONF="${TARGET_DIR}/etc/dnsmasq_wlan0.conf"
 if [[ -f "${DNSMASQ_CONF}" ]] && [[ ! -z "${WIFI_AP_ADDR}" ]] && [[ ! -z "${WIFI_AP_NETMASK}" ]]; then
 	IFS='.' read -r a1 a2 a3 a4 <<< "${WIFI_AP_ADDR}"
