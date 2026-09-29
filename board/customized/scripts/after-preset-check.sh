@@ -19,7 +19,7 @@
 # files that have to be present for something to have one owner, and a unit that
 # is enabled somewhere other than multi-user.target.wants. Rule G covers the
 # pieces of the Xray uplink whose absence is invisible until a LAN client tries to
-# reach the internet.
+# reach the internet. Rule H does the same for the WireGuard uplink.
 #
 # Runs once per filesystem type (ext2 and tar here), on a throwaway copy of
 # target/ that is deleted afterwards, so it must stay read-only - it is.
@@ -212,6 +212,8 @@ check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
 	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service"
 check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service xray-health.timer xray-health.service" \
 	"/etc/xray/config.json"
+check_feature WG_CLIENT   "${WG_CLIENT:-OFF}"    "wg-client.service wg-health.timer wg-health.service" \
+	"/etc/wireguard/wg0.conf"
 
 ## openvpn@client.service is the one gated unit preset-all does not manage
 ## (openvpn@.service is a real template), so here presence in .wants is meaningful
@@ -351,6 +353,44 @@ if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
 				"ignore resolv-file=/run/xray-dns.conf and leaves the LAN with no upstream"
 		fi
 	done
+fi
+
+## H. The WireGuard uplink. As for Xray, the pieces below are the ones whose
+## absence is silent: wg0.conf present and the unit enabled, but no module, no
+## wg binary, or no timer - and the board boots with a tunnel that either never
+## comes up or dies unnoticed.
+if [[ "${WG_CLIENT:-OFF}" == "ON" ]]; then
+	for path in /usr/bin/wg /usr/sbin/wgpolicy /usr/sbin/wg-health; do
+		if [[ ! -e "${TARGET_DIR}${path}" ]]; then
+			fail "WG_CLIENT=ON but ${path} is missing from the image"
+		fi
+	done
+	if [[ -z "$(find "${TARGET_DIR}/lib/modules" -name 'wireguard.ko*' 2>/dev/null)" ]]; then
+		fail "WG_CLIENT=ON but there is no wireguard.ko under /lib/modules" \
+			"(CONFIG_WIREGUARD=m in the kernel config?)"
+	fi
+	if [[ ! -L "${TARGET_DIR}/etc/systemd/system/timers.target.wants/wg-health.timer" ]]; then
+		fail "WG_CLIENT=ON but wg-health.timer is not linked into" \
+			"timers.target.wants, so a dead tunnel would never be noticed"
+	fi
+	## Same busybox trap as rule G: wgpolicy's "table 200" would land in main.
+	if [[ -L "${TARGET_DIR}/usr/sbin/ip" ]] || [[ ! -f "${TARGET_DIR}/usr/sbin/ip" ]]; then
+		fail "WG_CLIENT=ON but /usr/sbin/ip is not iproute2, so wgpolicy's policy" \
+			"routing would fail or land in the main table"
+	fi
+	if [[ "${WG_LAN_ROUTE:-OFF}" == "ON" ]]; then
+		if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
+			fail "WG_LAN_ROUTE=ON and XRAY_CLIENT=ON: xray's TPROXY takes the LAN" \
+				"before wgpolicy's rules ever see it"
+		fi
+		for path in /etc/dnsmasq_usb0.conf /etc/dnsmasq_wlan0.conf; do
+			[[ -f "${TARGET_DIR}${path}" ]] || continue
+			if ! grep -q '^resolv-file=/etc/wireguard/dns\.conf$' "${TARGET_DIR}${path}"; then
+				fail "WG_LAN_ROUTE=ON but ${path} does not take its upstream from" \
+					"/etc/wireguard/dns.conf, so LAN DNS would bypass the tunnel"
+			fi
+		done
+	fi
 fi
 
 if [[ ${RC} -eq 0 ]]; then

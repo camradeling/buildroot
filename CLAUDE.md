@@ -101,6 +101,7 @@ These are consumed by the createfs post-build scripts:
 - `SSH_KEY_FILES_LIST` — authorized SSH public keys
 - `USB_GADGET_DEVICE`, `USB_RNDIS` — USB gadget config
 - `WIFI_CLIENT`, `WLAN_SSID`, `WLAN_PSK` — WiFi client config
+- `WG_CLIENT`, `WG_CONFIG`, `WG_LAN_ROUTE` — WireGuard client wg0 (`0014`, `overlays/services/wireguard`): brought up by `wg-client.service`, watched by `wg-health.timer`; `WG_LAN_ROUTE=ON` routes the LAN through it and requires `XRAY_CLIENT=OFF`
 - `QUECTEL_ECM` — install the udev hooks that switch a plugged Quectel modem to ECM and bring its `wwan0` uplink up (DHCP, default route at metric 700)
 
 ## Optional Services — how ON/OFF actually works

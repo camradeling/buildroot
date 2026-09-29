@@ -1,0 +1,15 @@
+[Unit]
+Description=Probe the WireGuard tunnel and repath the LAN if it is dead
+Documentation=file:/usr/sbin/wg-health
+# Same switch as wg-client.service. The unit has no [Install] section, so only
+# wg-health.timer pulls it in; the condition makes a manual start on a
+# WG_CLIENT=OFF board a no-op.
+ConditionPathExists=/etc/wireguard/wg0.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/wg-health
+# Two pings bounded by -w 6 each, so anything past this is wedged.
+TimeoutStartSec=60
+
+# No [Install]: wg-health.timer is the only thing that starts this.

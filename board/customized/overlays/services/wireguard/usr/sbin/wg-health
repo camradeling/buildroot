@@ -1,0 +1,166 @@
+#!/bin/bash
+# Is the WireGuard tunnel actually carrying traffic?
+#
+# WireGuard has no connection state to lose: wg0 stays up, "wg show" stays
+# populated and nothing fails when the path under it dies. The only evidence is
+# the absence of answers. So ask for one - a ping from the tunnel address to
+# WG_PROBE_ADDR (1.1.1.1 by default), which proves the whole path: wwan0, the
+# carrier, the server, its exit NAT.
+#
+# The latest handshake age is logged with every failure because it tells the two
+# cases apart: a recent handshake with no answers is the server's exit, an old one
+# is the path to the server. With PersistentKeepalive set, a healthy tunnel
+# re-handshakes every two minutes.
+#
+# Two escalations, in this order, the same shape as xray-health:
+#   1. restart wg-client.service. The new interface comes up with a new random
+#      source port (unless the config pins ListenPort), i.e. a new flow for every
+#      stateful box on the carrier path - which is the recovery that matters here.
+#   2. with WG_LAN_ROUTE=ON, take the LAN routing out (wgpolicy lan-del) while the
+#      probe keeps failing, so the LAN uses the direct path that does work, and put
+#      it back once the tunnel answers again.
+#
+# Run by wg-health.timer, every 60s.
+#
+# Usage: wg-health
+
+set -u
+
+. /etc/system.vars
+
+UNIT=wg-client.service
+IFACE=wg0
+PROBE_ADDR=${WG_PROBE_ADDR:-1.1.1.1}
+ENDPOINT=${WG_ENDPOINT:-}
+LAN_ROUTE=${WG_LAN_ROUTE:-OFF}
+THRESHOLD=${WG_HEALTH_FAILS:-3}
+COOLDOWN=${WG_HEALTH_COOLDOWN:-300}
+
+STATE_DIR=/run/wg-health
+FAILS_FILE=${STATE_DIR}/fails
+STATE_FILE=${STATE_DIR}/state
+RESTART_FILE=${STATE_DIR}/last-restart
+
+log()
+{
+	logger -t wg-health "$*"
+}
+
+read_num()
+{
+	_v=$(cat "${1}" 2>/dev/null)
+	case "${_v}" in
+	''|*[!0-9]*)	echo 0 ;;
+	*)		echo "${_v}" ;;
+	esac
+}
+
+## Three pings, any answer counts. -w bounds the whole thing, so unlike the
+## xray-health probe there is no read to wedge on.
+probe_tunnel()
+{
+	ping -I ${IFACE} -c 3 -w 6 -q "${PROBE_ADDR}" > /dev/null 2>&1
+}
+
+## Is there an uplink at all? The endpoint is the one address that is always
+## routed directly (by the main table, see wgpolicy), and ICMP to it survived
+## every TCP outage measured on this carrier, so no answer here means no uplink,
+## not a bad tunnel.
+probe_direct()
+{
+	[ -n "${ENDPOINT}" ] || return 0
+	ping -c 3 -w 6 -q "${ENDPOINT}" > /dev/null 2>&1
+}
+
+handshake_age()
+{
+	_hs=$(wg show ${IFACE} latest-handshakes 2>/dev/null | awk 'NR==1 {print $2}')
+	case "${_hs}" in
+	''|0)	echo "never" ;;
+	*)	echo "$(( $(date +%s) - _hs ))s ago" ;;
+	esac
+}
+
+ACTED=""
+
+escalate()
+{
+	_now=$(date +%s)
+	_last=$(read_num ${RESTART_FILE})
+	ACTED=""
+
+	if [ $(( _now - _last )) -ge ${COOLDOWN} ]; then
+		log "no answer through ${IFACE} after ${FAILS} probes (handshake $(handshake_age)), restarting ${UNIT}"
+		echo ${_now} > ${RESTART_FILE}
+		echo 0 > ${FAILS_FILE}
+		FAILS=0
+		systemctl restart ${UNIT}
+		## The restart put the LAN rules back; if the tunnel was already known
+		## not to work, keep the LAN off it until it has proved itself.
+		if [ "${STATE}" = "down" ]; then
+			/usr/sbin/wgpolicy lan-del
+		fi
+		ACTED=restart
+		return 0
+	fi
+
+	if [ "${STATE}" = "up" ] && [ "${LAN_ROUTE}" = "ON" ]; then
+		log "${IFACE} is still dead after a restart, taking the LAN off it"
+		/usr/sbin/wgpolicy lan-del
+		echo down > ${STATE_FILE}
+		STATE=down
+		ACTED=fall-open
+		return 0
+	fi
+}
+
+[ "${WG_CLIENT:-OFF}" = "ON" ] || exit 0
+## Stopped on purpose, or failed and waiting for someone: not ours to fight.
+systemctl is-active --quiet ${UNIT} || exit 0
+
+mkdir -p ${STATE_DIR} 2>/dev/null
+
+FAILS=$(read_num ${FAILS_FILE})
+STATE=$(cat ${STATE_FILE} 2>/dev/null)
+[ "${STATE}" = "down" ] || STATE=up
+
+## The unit is active but the interface is gone - deleted by hand, or a module
+## unload. Only a restart brings it back.
+if [ ! -d /sys/class/net/${IFACE} ]; then
+	log "${UNIT} is active but ${IFACE} does not exist, restarting it"
+	echo 0 > ${FAILS_FILE}
+	systemctl restart ${UNIT}
+	exit 0
+fi
+
+if probe_tunnel; then
+	echo 0 > ${FAILS_FILE}
+	if [ "${STATE}" = "down" ]; then
+		log "${IFACE} answers again after ${FAILS} failed probes, putting the LAN back on it"
+		/usr/sbin/wgpolicy lan-add
+		echo up > ${STATE_FILE}
+	fi
+	exit 0
+fi
+
+FAILS=$(( FAILS + 1 ))
+
+if ! probe_direct; then
+	echo 0 > ${FAILS_FILE}
+	log "no answer through ${IFACE} and none from the endpoint ${ENDPOINT} directly either:" \
+		"the uplink is down, so this is not the tunnel's fault"
+	exit 0
+fi
+
+echo ${FAILS} > ${FAILS_FILE}
+
+if [ ${FAILS} -ge ${THRESHOLD} ]; then
+	escalate
+	if [ -z "${ACTED}" ]; then
+		log "${IFACE} is still dead (${FAILS} consecutive probes, handshake $(handshake_age))"
+	fi
+	exit 0
+fi
+
+log "no answer through ${IFACE}, the endpoint answers directly (${FAILS}/${THRESHOLD}, handshake $(handshake_age))"
+exit 0
