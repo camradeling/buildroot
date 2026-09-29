@@ -32,6 +32,16 @@ DNS_UPSTREAM=${XRAY_DNS_UPSTREAM:-1.1.1.1}
 PROBE_PORT=${XRAY_PROBE_PORT:-5301}
 LAN_IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
 KILLSWITCH=${XRAY_KILLSWITCH:-OFF}
+## TCP keepalive on the tunnel's own connections to the server, in seconds of
+## idle before the first probe. Unset or OFF leaves xray's default, which is not
+## short enough for every path: measured on testbot4's carrier (a
+## phone on the same SIM gets the same packets), a middlebox forges an RST+ACK
+## (TTL 127, IP ID 10003, never sent by the server) into any tunnel connection
+## that has been silent for ~30 s, and live tunnel sockets there had keepalive
+## timers with up to 43 s still to run. About one in ten of those RSTs carries an
+## exact sequence number and kills the connection, and whatever LAN client was
+## riding it sees it cut for no visible reason.
+KEEPALIVE=${XRAY_TCP_KEEPALIVE:-OFF}
 
 ## The LAN resolvers. Both files are re-copied from their overlays on every build,
 ## so appending to them here is not cumulative - but the lines are stripped first
@@ -123,6 +133,17 @@ esac
 sane_field XRAY_DNS_ADDR "${DNS_ADDR}"
 sane_field XRAY_DNS_UPSTREAM "${DNS_UPSTREAM}"
 [[ "${PROBE_PORT}" =~ ^[0-9]+$ ]] || fail "XRAY_PROBE_PORT=${PROBE_PORT} is not a number"
+
+## One value for both idle and interval. On Linux an answered probe re-arms the
+## timer from the idle threshold, so on a healthy silent connection the probe
+## cadence is the idle value; the interval only matters once probes go unanswered,
+## and there is nothing to gain by making that different.
+KEEPALIVE_SOCKOPT=""
+if [[ "${KEEPALIVE}" != "OFF" ]]; then
+	[[ "${KEEPALIVE}" =~ ^[0-9]+$ ]] && [[ ${KEEPALIVE} -ge 1 ]] && [[ ${KEEPALIVE} -le 7200 ]] \
+		|| fail "XRAY_TCP_KEEPALIVE=${KEEPALIVE}, only OFF or 1..7200 seconds"
+	KEEPALIVE_SOCKOPT="\"sockopt\": { \"tcpKeepAliveIdle\": ${KEEPALIVE}, \"tcpKeepAliveInterval\": ${KEEPALIVE} },"
+fi
 
 if [[ -z "${XRAY_CONFIG}" ]]; then
 	fail "XRAY_CLIENT is ON but XRAY_CONFIG is not set"
@@ -277,6 +298,11 @@ vless://*)
 			print_yellow "  Building anyway: this is your config, not the build's."
 			print_yellow "##############################################################"
 		fi
+		## Same standing as the warning above: not the build's config to edit.
+		if [[ -n "${KEEPALIVE_SOCKOPT}" ]]; then
+			print_yellow "WARNING: XRAY_TCP_KEEPALIVE=${KEEPALIVE} is NOT applied to a verbatim config;"
+			print_yellow "  put tcpKeepAliveIdle/tcpKeepAliveInterval in the outbound's sockopt yourself."
+		fi
 		print_green "INFO: installed ${XRAY_CONFIG} verbatim as /etc/xray/config.json"
 		XRAY_VERBATIM=ON
 	else
@@ -366,7 +392,7 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
     { "tag": "proxy", "protocol": "vless",
       "settings": { "vnext": [ { "address": "${HOST}", "port": ${PORT},
         "users": [ { "id": "${UUID}", "encryption": "none", "flow": "${FLOW}" } ] } ] },
-      "streamSettings": { "network": "tcp", "security": "reality",
+      "streamSettings": { ${KEEPALIVE_SOCKOPT} "network": "tcp", "security": "reality",
         "realitySettings": { "serverName": "${SNI}", "fingerprint": "${FP}",
           "publicKey": "${PBK}", "shortId": "${SID}" } } },
     { "tag": "direct", "protocol": "freedom" }
@@ -378,7 +404,7 @@ EOF
 	fi
 	set_chmod 0644 ${XRAY_CONF}
 	## Deliberately no uuid/pbk/sid in the build log: it is kept and shared.
-	print_green "INFO: /etc/xray/config.json generated for ${HOST}:${PORT} (sni=${SNI} fp=${FP} flow=${FLOW})"
+	print_green "INFO: /etc/xray/config.json generated for ${HOST}:${PORT} (sni=${SNI} fp=${FP} flow=${FLOW} keepalive=${KEEPALIVE})"
 fi
 
 #####################################################################
