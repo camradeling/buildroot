@@ -41,6 +41,8 @@ RESOLVED_DROPIN="${TARGET_DIR}/etc/systemd/resolved.conf.d/xray.conf"
 PROBE_PORT=${XRAY_PROBE_PORT:-5301}
 LAN_IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
 KILLSWITCH=${XRAY_KILLSWITCH:-OFF}
+## The box's own traffic through singtun0 too, not only its DNS (step 5).
+BOARD_TUNNEL=${XRAY_BOARD_TUNNEL:-OFF}
 ## TCP keepalive on the tunnel's own connections to the server, in seconds of
 ## idle before the first probe. Unset or OFF leaves xray's default, which is not
 ## short enough for every path: measured on testbot4's carrier (a
@@ -110,6 +112,10 @@ sed -i -E "s|export XRAY_DNS_UPSTREAM=.*|export XRAY_DNS_UPSTREAM=${DNS_UPSTREAM
 sed -i -E "s|export XRAY_PROBE_PORT=.*|export XRAY_PROBE_PORT=${PROBE_PORT}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 sed -i -E "s|export XRAY_LAN_IFACES=.*|export XRAY_LAN_IFACES=\"${LAN_IFACES}\"|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 sed -i -E "s|export XRAY_KILLSWITCH=.*|export XRAY_KILLSWITCH=${KILLSWITCH}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+## Written again after the outbound is parsed; empty until then, so an OFF or a
+## failed build cannot leave a stale server address behind.
+sed -i -E "s|export XRAY_BOARD_TUNNEL=.*|export XRAY_BOARD_TUNNEL=OFF|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+sed -i -E "s|export XRAY_SERVER=.*|export XRAY_SERVER=|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 print_green "XRAY_CLIENT=${XRAY_CLIENT:-OFF}"
 
 if [[ -z "${XRAY_CLIENT}" ]]; then
@@ -143,6 +149,7 @@ esac
 sane_field XRAY_DNS_ADDR "${DNS_ADDR}"
 sane_field XRAY_DNS_UPSTREAM "${DNS_UPSTREAM}"
 [[ "${PROBE_PORT}" =~ ^[0-9]+$ ]] || fail "XRAY_PROBE_PORT=${PROBE_PORT} is not a number"
+[[ "${BOARD_TUNNEL}" == "ON" || "${BOARD_TUNNEL}" == "OFF" ]] || fail "XRAY_BOARD_TUNNEL=${BOARD_TUNNEL}, only ON or OFF"
 
 ## One value for both idle and interval. On Linux an answered probe re-arms the
 ## timer from the idle threshold, so on a healthy silent connection the probe
@@ -354,8 +361,10 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
 	## points systemd-resolved at its far end, ${TUN_DNS}, exclusively; port 53
 	## there is redirected to ${DNS_UPSTREAM} and dialled through the proxy
 	## (dialerProxy - freedom's redirect alone would dial it directly), anything
-	## else that reaches the TUN is dropped. Only the /30 is routed into it, so
-	## nothing else can. Without it the box resolves over plain UDP on wwan0 and
+	## else that reaches the TUN is dropped - unless XRAY_BOARD_TUNNEL=ON, in
+	## which case xraypolicy routes the box's own traffic into it and the rest
+	## goes to the proxy, like the laptop's sing-box. Otherwise only the /30 is
+	## routed into it, so nothing else can. Without it the box resolves over plain UDP on wwan0 and
 	## gets the carrier's forged answers: resolved's opportunistic DoT silently
 	## downgrades, and strict DoT is no better, as 853 is not reliably reachable.
 	##
@@ -398,6 +407,10 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
 	## locally generated, never enters PREROUTING and never gets fwmark 1. It is
 	## here for the day someone adds OUTPUT interception, where the companion
 	## "-m mark --mark 0xff -j RETURN" is what stops the proxy proxying itself.
+	## What the TUN does with everything that is not DNS: nothing reaches it
+	## unless XRAY_BOARD_TUNNEL=ON routes the box's traffic into it.
+	TUN_REST=tun-drop
+	[[ "${BOARD_TUNNEL}" == "ON" ]] && TUN_REST=proxy
 	create_dir ${XRAY_DIR}
 	cat > ${XRAY_CONF} <<EOF
 {
@@ -428,7 +441,7 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
   ],
   "routing": { "rules": [
     { "inboundTag": ["tun"], "port": "53", "outboundTag": "tun-dns" },
-    { "inboundTag": ["tun"], "outboundTag": "tun-drop" }
+    { "inboundTag": ["tun"], "outboundTag": "${TUN_REST}" }
   ] }
 }
 EOF
@@ -438,6 +451,18 @@ EOF
 	set_chmod 0644 ${XRAY_CONF}
 	## Deliberately no uuid/pbk/sid in the build log: it is kept and shared.
 	print_green "INFO: /etc/xray/config.json generated for ${HOST}:${PORT} (sni=${SNI} fp=${FP} flow=${FLOW} keepalive=${KEEPALIVE})"
+
+	## xraypolicy excludes the server from the board tunnel by address, so it has
+	## to be one: a hostname would be resolved through the tunnel it opens.
+	if [[ "${BOARD_TUNNEL}" == "ON" ]]; then
+		[[ "${HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+			|| fail "XRAY_BOARD_TUNNEL=ON needs the server as an IPv4 literal, ${XRAY_CONFIG} has '${HOST}'"
+		sed -i -E "s|export XRAY_BOARD_TUNNEL=.*|export XRAY_BOARD_TUNNEL=ON|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+		sed -i -E "s|export XRAY_SERVER=.*|export XRAY_SERVER=${HOST}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+		print_green "INFO: XRAY_BOARD_TUNNEL=ON, the box's own traffic goes through ${TUN_IFACE} (server ${HOST} excluded)"
+	fi
+elif [[ "${BOARD_TUNNEL}" == "ON" ]]; then
+	print_yellow "WARNING: XRAY_BOARD_TUNNEL=ON is ignored for a verbatim config.json"
 fi
 
 #####################################################################

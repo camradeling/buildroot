@@ -20,7 +20,8 @@
 # It also owns the LAN's DNS upstream, for the same fail-open reason: the mangle
 # rules and the resolvers have to move together or "fail open" means a LAN that
 # routes directly and resolves nothing. See dns_set below. And the box's own DNS,
-# through the singtun0 TUN inbound - see board_dns_add.
+# through the singtun0 TUN inbound - see board_dns_add - and with
+# XRAY_BOARD_TUNNEL=ON the box's own traffic too, see board_tunnel_add.
 #
 # Called by xray.service:
 #   ExecStartPost=/usr/sbin/xraypolicy add
@@ -225,8 +226,8 @@ dns_set()
 ## addresses as the sing-box client on the laptop - and resolved is told to use
 ## the far end of it as its only DNS server ("~." makes the link exclusive). What
 ## arrives there on port 53 is redirected to ${DNS_UPSTREAM} through the tunnel;
-## anything else is dropped. No route but the /30 points into the TUN, so nothing
-## except these queries can ever enter it.
+## anything else is dropped - unless XRAY_BOARD_TUNNEL=ON routes the box's own
+## traffic into it, see board_tunnel_add.
 ##
 ## The same add/del as the LAN, and for the same reason: while the tunnel is dead
 ## the box resolves directly instead of not at all.
@@ -271,6 +272,63 @@ board_dns_del()
 	fi
 	resolvectl flush-caches 2>/dev/null
 	log "box DNS: systemd-resolved back to its direct upstream"
+}
+
+#####################################################################
+## XRAY_BOARD_TUNNEL=ON: the box's own traffic through singtun0 as well
+#####################################################################
+## The laptop's shape - default route via the TUN - but as policy rules, never
+## as a main-table route, so what is excluded is explicit and nothing that
+## matters can fall into the tunnel by accident:
+##
+##   pref 9000  iif lo  lookup main suppress_prefixlength 0
+##   pref 9010  iif lo  to <XRAY_SERVER>  lookup main
+##   pref 9020  iif lo  to 1.1.1.1 tcp dport 80  lookup main
+##   pref 9030  iif lo  udp dport 123  lookup main
+##   pref 9040  iif lo  lookup 2022           (default dev singtun0)
+##
+## "iif lo" is how ip rule says "generated on this box": forwarded LAN traffic
+## never matches, so the TPROXY path above is untouched. 9000 lets the main
+## table answer everything but its default route - the LANs, the modem's
+## 192.168.43.0/24, anything connected - which is why SSH from the LAN keeps
+## working: it is INPUT, and its replies go to a connected subnet. 9010 is the
+## loop guard: xray's own connection to the server must not enter the tunnel
+## it carries. 9020 is xray-health's direct probe, which has to be direct to
+## mean anything. 9030 is NTP: a clock that never syncs breaks REALITY.
+##
+## dhclient on wwan0 sends from a raw socket, which routing does not apply to.
+##
+## Fail-open: with xray gone singtun0 is gone, the route in 2022 with it, and
+## the lookup falls through to main. del removes the rules anyway, so the
+## health check's fall-open takes the box off the tunnel too.
+BOARD_TABLE=2022
+BOARD_PROBE=1.1.1.1
+
+board_tunnel_del()
+{
+	for _p in 9000 9010 9020 9030 9040; do
+		while ip rule del pref ${_p} 2>/dev/null; do :; done
+	done
+	ip route flush table ${BOARD_TABLE} 2>/dev/null
+}
+
+board_tunnel_add()
+{
+	[ "${XRAY_BOARD_TUNNEL:-OFF}" = "ON" ] || return 0
+	if [ -z "${XRAY_SERVER:-}" ]; then
+		log "WARNING: XRAY_BOARD_TUNNEL=ON but no XRAY_SERVER, the box's own traffic stays direct"
+		return 0
+	fi
+	## board_dns_add has already waited for the interface.
+	ip link show ${TUN_IFACE} > /dev/null 2>&1 || return 0
+	board_tunnel_del
+	ip route replace default dev ${TUN_IFACE} table ${BOARD_TABLE} || return 1
+	ip rule add pref 9000 iif lo lookup main suppress_prefixlength 0 || return 1
+	ip rule add pref 9010 iif lo to "${XRAY_SERVER}" lookup main || return 1
+	ip rule add pref 9020 iif lo to ${BOARD_PROBE} ipproto tcp dport 80 lookup main || return 1
+	ip rule add pref 9030 iif lo ipproto udp dport 123 lookup main || return 1
+	ip rule add pref 9040 iif lo lookup ${BOARD_TABLE} || return 1
+	log "box traffic: default via ${TUN_IFACE} (excluded: ${XRAY_SERVER}, the direct probe, NTP, connected subnets)"
 }
 
 ## The down state: direct, unless the kill switch says there is no down state.
@@ -338,6 +396,7 @@ add)
 	## are about to be pointed at is up.
 	dns_set "${DNS_ADDR}"
 	board_dns_add
+	board_tunnel_add
 	## Last, so there is no moment with neither the tunnel nor the kill switch.
 	killswitch_del
 	log "LAN (${IFACES}) is TPROXY'd to 127.0.0.1:${PORT} via fwmark ${MARK}/table ${TABLE}"
@@ -348,6 +407,7 @@ del)
 	## the way out and the DNS close.
 	killswitch_add
 	dns_direct
+	board_tunnel_del
 	board_dns_del
 	unhook_chain
 	route_del
