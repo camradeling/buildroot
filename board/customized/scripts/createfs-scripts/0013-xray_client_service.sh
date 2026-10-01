@@ -28,6 +28,15 @@ DNS_ADDR=${XRAY_DNS_ADDR:-127.0.0.2}
 ## below dials it), directly from the box while it is down (xraypolicy writes it
 ## into the resolv-file). One value, so the two paths cannot answer differently.
 DNS_UPSTREAM=${XRAY_DNS_UPSTREAM:-1.1.1.1}
+## The TUN inbound for the box's own DNS (step 5). Fixed, and repeated in
+## overlays/services/xray/usr/sbin/xraypolicy - keep the two in step.
+TUN_IFACE=singtun0
+TUN_ADDR=172.19.0.1/30
+TUN_DNS=172.19.0.2
+## With the tunnel up the box's own lookups go to resolved's stub, and resolved
+## sends them into the TUN; with it down, to ${DNS_UPSTREAM} directly - this
+## drop-in is that down state, so it is the same resolver either way.
+RESOLVED_DROPIN="${TARGET_DIR}/etc/systemd/resolved.conf.d/xray.conf"
 ## The health check's probe inbound (see xray-health). Loopback only.
 PROBE_PORT=${XRAY_PROBE_PORT:-5301}
 LAN_IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
@@ -75,6 +84,7 @@ sane_field()
 ## the createfs copies use --delete, so without this a config from an
 ## XRAY_CLIENT=ON build survives into an OFF one and re-enables the whole feature.
 delete_file_silent ${XRAY_CONF}
+delete_file_silent ${RESOLVED_DROPIN}
 
 for f in ${DNSMASQ_CONFS}; do
 	[[ -f "${TARGET_DIR}/${f}" ]] || continue
@@ -278,6 +288,10 @@ vless://*)
 		## first since a hand-written config is formatted however its author liked.
 		## A block with "enabled": false would also trip this, which is why the
 		## message states what was matched rather than asserting an effect.
+		if ! grep -q "\"${TUN_IFACE}\"" "${XRAY_CONF}"; then
+			print_yellow "WARNING: ${XRAY_CONFIG} has no tun inbound named ${TUN_IFACE}, so the"
+			print_yellow "  box's own DNS keeps going out directly (and gets forged answers)."
+		fi
 		XRAY_FLAT=$(tr -d ' \t\n' < "${XRAY_CONF}")
 		N_OVERRIDE=$(grep -o '"destOverride"' <<< "${XRAY_FLAT}" | wc -l)
 		N_ROUTEONLY=$(grep -o '"routeOnly":true' <<< "${XRAY_FLAT}" | wc -l)
@@ -331,9 +345,19 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
 	#####################################################################
 	## Three dokodemo-door inbounds: the TPROXY one the LAN's packets are handed
 	## to, a DNS one on loopback for the LAN resolvers (see step 6), and the
-	## health check's probe (see xray-health). No routing rules on purpose - the
-	## first outbound is the default, so everything that reaches an inbound goes
-	## into the tunnel, which is the requirement.
+	## health check's probe (see xray-health). The routing rules touch none of
+	## them - the first outbound is the default, so everything that reaches those
+	## goes into the tunnel, which is the requirement.
+	##
+	## Plus a TUN inbound, ${TUN_IFACE}, for the box's *own* DNS - the same
+	## interface and addresses as the sing-box client on the laptop. xraypolicy
+	## points systemd-resolved at its far end, ${TUN_DNS}, exclusively; port 53
+	## there is redirected to ${DNS_UPSTREAM} and dialled through the proxy
+	## (dialerProxy - freedom's redirect alone would dial it directly), anything
+	## else that reaches the TUN is dropped. Only the /30 is routed into it, so
+	## nothing else can. Without it the box resolves over plain UDP on wwan0 and
+	## gets the carrier's forged answers: resolved's opportunistic DoT silently
+	## downgrades, and strict DoT is no better, as 853 is not reliably reachable.
 	##
 	## The probe inbound is the only way to ask "is the tunnel actually working"
 	## from a box with nothing but busybox on it: a connection to it is a real
@@ -386,7 +410,9 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
     { "tag": "dns-in", "listen": "${DNS_ADDR}", "port": 53, "protocol": "dokodemo-door",
       "settings": { "network": "tcp,udp", "address": "${DNS_UPSTREAM}", "port": 53 } },
     { "tag": "probe", "listen": "127.0.0.1", "port": ${PROBE_PORT}, "protocol": "dokodemo-door",
-      "settings": { "network": "tcp", "address": "1.1.1.1", "port": 80 } }
+      "settings": { "network": "tcp", "address": "1.1.1.1", "port": 80 } },
+    { "tag": "tun", "protocol": "tun",
+      "settings": { "name": "${TUN_IFACE}", "mtu": 1400, "gateway": ["${TUN_ADDR}"] } }
   ],
   "outbounds": [
     { "tag": "proxy", "protocol": "vless",
@@ -395,8 +421,15 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
       "streamSettings": { ${KEEPALIVE_SOCKOPT} "network": "tcp", "security": "reality",
         "realitySettings": { "serverName": "${SNI}", "fingerprint": "${FP}",
           "publicKey": "${PBK}", "shortId": "${SID}" } } },
-    { "tag": "direct", "protocol": "freedom" }
-  ]
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "tun-dns", "protocol": "freedom", "settings": { "redirect": "${DNS_UPSTREAM}:53" },
+      "streamSettings": { "sockopt": { "dialerProxy": "proxy" } } },
+    { "tag": "tun-drop", "protocol": "blackhole" }
+  ],
+  "routing": { "rules": [
+    { "inboundTag": ["tun"], "port": "53", "outboundTag": "tun-dns" },
+    { "inboundTag": ["tun"], "outboundTag": "tun-drop" }
+  ] }
 }
 EOF
 	if [[ ! -f "${XRAY_CONF}" ]]; then
@@ -413,9 +446,8 @@ fi
 ## Without this the LAN leaks DNS: dnsmasq forwards to /etc/resolv.conf as
 ## locally generated traffic, which PREROUTING never sees, so queries go out
 ## around the tunnel. With it, they are ordinary local sockets to the dns-in
-## inbound and get resolved from the server's side. The board's own lookups still
-## go to /etc/resolv.conf directly, which is what lets Xray resolve its server
-## address before a tunnel exists.
+## inbound and get resolved from the server's side. The board's own lookups are
+## step 7's.
 ##
 ## Indirectly, through a resolv-file, rather than a "server=" line naming the
 ## inbound, because the upstream has to follow the routing: with a hard-wired
@@ -432,5 +464,21 @@ for f in ${DNSMASQ_CONFS}; do
 	echo "resolv-file=${RESOLV_FILE}" >> ${TARGET_DIR}/${f}
 	print_green "INFO: ${f} resolves through ${RESOLV_FILE} (${DNS_ADDR}:53 while the tunnel is up)"
 done
+
+
+#####################################################################
+## 7. the box's own resolver: systemd-resolved, never a nameserver directly
+#####################################################################
+## singtun0 only helps what asks systemd-resolved. NSS does ("resolve" is first
+## in nsswitch.conf), but anything that reads /etc/resolv.conf itself - busybox
+## nslookup, for one - would still go to 0002's nameserver over plain UDP. So
+## /etc/resolv.conf points at resolved's stub instead, overriding 0002 (which
+## rewrites it on every build, so an OFF build gets its nameserver back).
+create_dir "$(dirname "${RESOLVED_DROPIN}")"
+printf '# Generated by 0013-xray_client_service.sh: the down-state upstream.\n[Resolve]\nDNS=%s\n' \
+	"${DNS_UPSTREAM}" > "${RESOLVED_DROPIN}"
+printf '# Generated by 0013-xray_client_service.sh: systemd-resolved, which\n# xraypolicy points through the tunnel (singtun0) while it is up.\nnameserver 127.0.0.53\n' \
+	> "${TARGET_DIR}/etc/resolv.conf"
+print_green "INFO: /etc/resolv.conf -> 127.0.0.53, resolved's direct upstream ${DNS_UPSTREAM}"
 
 exit 0

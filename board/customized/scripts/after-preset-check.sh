@@ -285,7 +285,9 @@ fi
 ## condition; these are the pieces whose absence shows up only as "the LAN has no
 ## internet", with the rules installed and nothing behind them.
 if [[ "${XRAY_CLIENT:-OFF}" == "ON" ]]; then
-	for path in /usr/bin/xray /usr/sbin/xraypolicy /usr/sbin/xray-health; do
+	## resolvectl: xraypolicy points the box's own DNS at the singtun0 inbound
+	## with it, and without it does nothing but log.
+	for path in /usr/bin/xray /usr/sbin/xraypolicy /usr/sbin/xray-health /usr/bin/resolvectl; do
 		if [[ ! -e "${TARGET_DIR}${path}" ]]; then
 			fail "XRAY_CLIENT=ON but ${path} is missing from the image"
 		fi

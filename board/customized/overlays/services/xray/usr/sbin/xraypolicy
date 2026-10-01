@@ -19,7 +19,8 @@
 #
 # It also owns the LAN's DNS upstream, for the same fail-open reason: the mangle
 # rules and the resolvers have to move together or "fail open" means a LAN that
-# routes directly and resolves nothing. See dns_set below.
+# routes directly and resolves nothing. See dns_set below. And the box's own DNS,
+# through the singtun0 TUN inbound - see board_dns_add.
 #
 # Called by xray.service:
 #   ExecStartPost=/usr/sbin/xraypolicy add
@@ -215,6 +216,63 @@ dns_set()
 	log "LAN DNS upstream: ${_ns:-none (kill switch closed)}"
 }
 
+#####################################################################
+## the box's own DNS: systemd-resolved through singtun0
+#####################################################################
+## Everything above is for the LAN; the box's own lookups go to systemd-resolved,
+## whose upstream is plain UDP over wwan0, where the carrier forges answers. So
+## config.json also has a TUN inbound, singtun0 - the same interface and the same
+## addresses as the sing-box client on the laptop - and resolved is told to use
+## the far end of it as its only DNS server ("~." makes the link exclusive). What
+## arrives there on port 53 is redirected to ${DNS_UPSTREAM} through the tunnel;
+## anything else is dropped. No route but the /30 points into the TUN, so nothing
+## except these queries can ever enter it.
+##
+## The same add/del as the LAN, and for the same reason: while the tunnel is dead
+## the box resolves directly instead of not at all.
+##
+## The addresses are repeated in createfs-scripts/0013-xray_client_service.sh -
+## keep the two in step. xray creates the interface but on Linux does not
+## configure the gateway address itself, hence the ip addr here.
+TUN_IFACE=singtun0
+TUN_ADDR=172.19.0.1/30
+TUN_DNS=172.19.0.2
+
+board_dns_add()
+{
+	## Type=simple: ExecStartPost runs as soon as xray is forked, and the TUN
+	## appears a moment later.
+	_n=0
+	while ! ip link show ${TUN_IFACE} > /dev/null 2>&1; do
+		_n=$((_n + 1))
+		if [ ${_n} -gt 50 ]; then
+			log "WARNING: no ${TUN_IFACE} (config.json without the tun inbound?), the box keeps resolving directly"
+			return 0
+		fi
+		sleep 0.1
+	done
+	ip addr replace ${TUN_ADDR} dev ${TUN_IFACE} || return 1
+	resolvectl dns ${TUN_IFACE} ${TUN_DNS} || return 1
+	resolvectl domain ${TUN_IFACE} '~.'
+	resolvectl default-route ${TUN_IFACE} yes
+	resolvectl llmnr ${TUN_IFACE} no
+	resolvectl mdns ${TUN_IFACE} no
+	resolvectl flush-caches
+	log "box DNS: systemd-resolved -> ${TUN_DNS} on ${TUN_IFACE} (exclusive, through the tunnel)"
+}
+
+board_dns_del()
+{
+	## After xray has exited the interface is gone and resolved has already
+	## dropped its settings; revert is for the health check's del, where xray -
+	## and so the interface - is still there.
+	if ip link show ${TUN_IFACE} > /dev/null 2>&1; then
+		resolvectl revert ${TUN_IFACE} 2>/dev/null
+	fi
+	resolvectl flush-caches 2>/dev/null
+	log "box DNS: systemd-resolved back to its direct upstream"
+}
+
 ## The down state: direct, unless the kill switch says there is no down state.
 dns_direct()
 {
@@ -279,6 +337,7 @@ add)
 	## The resolvers move with the traffic, and only now that the inbound they
 	## are about to be pointed at is up.
 	dns_set "${DNS_ADDR}"
+	board_dns_add
 	## Last, so there is no moment with neither the tunnel nor the kill switch.
 	killswitch_del
 	log "LAN (${IFACES}) is TPROXY'd to 127.0.0.1:${PORT} via fwmark ${MARK}/table ${TABLE}"
@@ -289,6 +348,7 @@ del)
 	## the way out and the DNS close.
 	killswitch_add
 	dns_direct
+	board_dns_del
 	unhook_chain
 	route_del
 	flush_conntrack
