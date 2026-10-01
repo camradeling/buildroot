@@ -14,3 +14,6 @@
 *~
 *.pyc
 board/customized/orangepi/orangepi3-test.vars
+
+# per-vars-file secrets (WiFi PSKs), sourced by build.sh
+board/customized/orangepi/*.secrets

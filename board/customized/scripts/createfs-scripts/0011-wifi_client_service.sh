@@ -59,8 +59,14 @@ WPA_CONF="${TARGET_DIR}/etc/wpa_supplicant_wlan1.conf"
 if [[ -f "${WPA_CONF}" ]] && [[ ! -z "${WLAN_SSID}" ]]; then
 	sed -i -E "s/ssid=\".*\"/ssid=\"${WLAN_SSID}\"/g" ${WPA_CONF}
 	print_green "WLAN_SSID=${WLAN_SSID}"
+	## The PSK comes from <target>.secrets next to the vars file (not in git),
+	## and stays out of the build log.
+	if [[ -z "${WLAN_PSK}" ]]; then
+		print_red "ERROR: WLAN_PSK is not set - put it in the .secrets file next to the vars file"
+		exit 1
+	fi
 	sed -i -E "s/psk=\".*\"/psk=\"${WLAN_PSK}\"/g" ${WPA_CONF}
-	print_green "WLAN_PSK=${WLAN_PSK}"
+	print_green "WLAN_PSK set (${#WLAN_PSK} characters)"
 fi
 
 ## patch hostapd.conf interface with WIFI_AP_WLAN_NAME

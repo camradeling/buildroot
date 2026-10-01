@@ -74,6 +74,12 @@ for TARGET in "${TARGETS[@]}"; do
 
     # shellcheck source=/dev/null
     source "$VARS"
+    # Secrets (WiFi PSKs) live next to the vars file, outside git
+    SECRETS="${VARS%.vars}.secrets"
+    if [ -f "$SECRETS" ]; then
+        # shellcheck source=/dev/null
+        source "$SECRETS"
+    fi
 
     echo "Building $TARGET (output: output_${TARGET})..."
     if [ -n "$MAKE_GOAL" ]; then
