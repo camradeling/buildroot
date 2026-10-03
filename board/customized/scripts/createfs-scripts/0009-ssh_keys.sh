@@ -13,6 +13,12 @@ read -r -a array <<< "${SSH_KEY_FILES_LIST}"
 
 for filename in "${array[@]}"
 do
+	## a key file the template's placeholder still points at would otherwise
+	## build an image nobody can log in to
+	if [[ ! -r "${filename}" ]]; then
+		print_red "ERROR: SSH_KEY_FILES_LIST: ${filename} not found or not readable"
+		exit 1
+	fi
 	print_green "adding ssh key file from ${filename}"
 	KEYVAL=$(cat ${filename} | sed -E "s:(ssh-rsa) (.*) (.*):\1 \2:g")
 	echo ${KEYVAL} >> ${AUTH_KEY_FILE}

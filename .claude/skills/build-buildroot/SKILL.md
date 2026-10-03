@@ -80,7 +80,10 @@ The script auto-initializes the output directory with the target's defconfig if 
 
 ## Vars Files
 
-Located in `board/customized/orangepi/`:
+Located in `board/customized/orangepi/`. They are untracked build inputs; git
+has only `<name>.vars.template`. If `build.sh` says the vars file is missing,
+copy the template and ask the user for the local paths and PSKs - never commit
+a `.vars` file or put real paths/secrets into a template.
 - `orangepi4-test.vars` — default config for testbot4
 - `orangepi_new-test.vars` — config for testbot_new (AP on ch36, masquerade via usb0)
 - `orangepi3.vars` — default production config for Zero3

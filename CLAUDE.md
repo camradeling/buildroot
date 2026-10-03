@@ -81,15 +81,29 @@ Power-fail safe: active marker is only written after dd completes successfully.
 | `board/customized/scripts/createfs-scripts/` | Numbered post-build scripts (network, hostname, services, SSH keys) |
 | `board/customized/scripts/before-fs-allscripts.sh` | Post-build hook that runs all createfs-scripts in order (aborts the build on the first non-zero exit) |
 | `board/customized/scripts/after-preset-check.sh` | Post-**fakeroot** hook (testbot4 only): asserts that the systemd units enabled by Buildroot's `preset-all` match `/etc/system.vars`. See "Optional services" below |
-| `board/customized/orangepi/orangepi3.vars` | Build-time environment config for Zero3 (hostname, network, GPIO, VPN, USB gadget) |
-| `board/customized/orangepi/orangepi.vars` | Same for Zero |
+| `board/customized/orangepi/orangepi3.vars.template` | Template for the Zero3 build-time config (hostname, network, GPIO, VPN, USB gadget); copy to `orangepi3.vars` |
+| `board/customized/orangepi/orangepi.vars.template` | Same for Zero |
 | `build.sh` | Top-level build script (target selection, vars sourcing, auto-init) |
 
 ## Environment Variables (vars files)
 
-Vars files live in `board/customized/orangepi/` and are sourced by `build.sh`:
+Vars files live in `board/customized/orangepi/` and are sourced by `build.sh`.
+They hold local paths (SSH keys, VPN/xray/WireGuard configs) and secrets (WiFi
+PSKs), so **they are not in git** (`.gitignore: *.vars`). Git tracks only
+`<target>.vars.template`, with placeholder paths and empty PSKs. After a fresh
+checkout, copy the template, fill it in, and build:
+
+```bash
+cp board/customized/orangepi/orangepi4-test.vars.template board/customized/orangepi/orangepi4-test.vars
+```
+
+A setting that changes for everyone (a new variable, a new default) goes into
+the template; a local value goes only into the untracked copy.
+
+- `orangepi4-test.vars` — testbot4 (default target of the build skill)
+- `orangepi_new-test.vars` — testbot_new
 - `orangepi3.vars` — production config for Zero3
-- `orangepi3-test.vars` — test config for Zero3
+- `orangepi3-test.vars` — test config for Zero3 (no template)
 - `orangepi.vars` — config for Zero
 
 These are consumed by the createfs post-build scripts:

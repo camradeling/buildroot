@@ -57,6 +57,12 @@ for TARGET in "${TARGETS[@]}"; do
 
     if [ ! -f "$VARS" ]; then
         echo "Error: vars file not found: $VARS" >&2
+        # Vars files are local build inputs, not tracked: git has only the
+        # template, with placeholder paths and empty secrets.
+        if [ -f "$VARS.template" ]; then
+            echo "Create it from the template and fill it in:" >&2
+            echo "  cp $VARS.template $VARS" >&2
+        fi
         exit 1
     fi
 
@@ -74,7 +80,8 @@ for TARGET in "${TARGETS[@]}"; do
 
     # shellcheck source=/dev/null
     source "$VARS"
-    # Secrets (WiFi PSKs) live next to the vars file, outside git
+    # Legacy: WiFi PSKs used to be split out next to the vars file. The vars
+    # file itself is untracked now and may hold them directly.
     SECRETS="${VARS%.vars}.secrets"
     if [ -f "$SECRETS" ]; then
         # shellcheck source=/dev/null

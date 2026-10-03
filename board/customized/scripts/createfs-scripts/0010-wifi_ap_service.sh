@@ -44,10 +44,10 @@ HOSTAPD_CONF="${TARGET_DIR}/etc/hostapd.conf"
 if [[ -f "${HOSTAPD_CONF}" ]] && [[ ! -z "${WIFI_AP_SSID}" ]]; then
 	sed -i -E "s/^ssid=.*/ssid=${WIFI_AP_SSID}/g" ${HOSTAPD_CONF}
 	print_green "WIFI_AP_SSID=${WIFI_AP_SSID}"
-	## The PSK comes from <target>.secrets next to the vars file (not in git),
+	## The PSK comes from the vars file (not in git, see build.sh),
 	## and stays out of the build log.
 	if [[ -z "${WIFI_AP_PSK}" ]]; then
-		print_red "ERROR: WIFI_AP_PSK is not set - put it in the .secrets file next to the vars file"
+		print_red "ERROR: WIFI_AP_PSK is not set - set it in the vars file"
 		exit 1
 	fi
 	sed -i -E "s/^wpa_passphrase=.*/wpa_passphrase=${WIFI_AP_PSK}/g" ${HOSTAPD_CONF}

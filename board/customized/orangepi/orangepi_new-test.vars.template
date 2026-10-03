@@ -1,4 +1,10 @@
 #!/bin/bash
+# TEMPLATE - the build never reads this file. Copy it once per checkout and fill
+# it in; the copy is the build input and is gitignored, so local paths and
+# secrets never reach git:
+#   cp board/customized/orangepi/orangepi_new-test.vars.template board/customized/orangepi/orangepi_new-test.vars
+# Paths below are placeholders; a feature switched ON fails the build until its
+# path points at a real file. Empty PSKs fail the build the same way.
 ################3 username #############################################
 export USERDIR=/home/${USER}
 ################# system variables file ################################
@@ -9,10 +15,10 @@ export SRCBOOTINIFILE=boot4.cmd
 ################# device hostname ######################################
 export DEV_HOSTNAME="orange"
 ################# ssh keys #############################################
-export SSH_KEY_FILES_LIST="/home/claudea/.ssh/id_rsa_camradeling.pub /home/claudea/.ssh/id_rsa_zero3.pub"
+export SSH_KEY_FILES_LIST="/path/to/your_key.pub"
 ################# vpn config file ######################################
 export VPN_CLIENT=OFF
-export VPN_CONFIG=/home/denisov/vpn/officehub.conf
+export VPN_CONFIG=/path/to/openvpn-client.conf
 ################# network configuration ################################
 export DEVICE_IFACE="eth0"
 export DEVICE_STATIC_ADDR="ON"
@@ -39,13 +45,13 @@ export USB_MASS_STORAGE=OFF
 export WIFI_CLIENT=OFF
 export WIFI_CLIENT_WLAN_NAME=wlan1
 export WLAN_SSID=Tamasha
-export WLAN_PSK=repzrepz
+export WLAN_PSK=
 ################ wifi access point #####################################
 export WIFI_AP=ON
 export WIFI_AP_WLAN_NAME=wlan0
 export WIFI_AP_ADDR=192.168.4.1
 export WIFI_AP_NETMASK=255.255.255.0
 export WIFI_AP_SSID=testap
-export WIFI_AP_PSK=12345679
+export WIFI_AP_PSK=
 export WIFI_AP_CHANNEL=36
 export WIFI_AP_BSS_TRANSITION=ON

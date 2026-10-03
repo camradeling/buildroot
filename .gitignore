@@ -13,7 +13,8 @@
 *.rej
 *~
 *.pyc
-board/customized/orangepi/orangepi3-test.vars
-
-# per-vars-file secrets (WiFi PSKs), sourced by build.sh
+# Build inputs: local paths and secrets. Only the *.vars.template files are in
+# git; copy one to <target>.vars and fill it in (see build.sh).
+board/customized/orangepi/*.vars
+# legacy split-out WiFi PSKs, still sourced by build.sh if present
 board/customized/orangepi/*.secrets

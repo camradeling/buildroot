@@ -1,4 +1,10 @@
 #!/bin/bash
+# TEMPLATE - the build never reads this file. Copy it once per checkout and fill
+# it in; the copy is the build input and is gitignored, so local paths and
+# secrets never reach git:
+#   cp board/customized/orangepi/orangepi4-test.vars.template board/customized/orangepi/orangepi4-test.vars
+# Paths below are placeholders; a feature switched ON fails the build until its
+# path points at a real file. Empty PSKs fail the build the same way.
 ################3 username #############################################
 export USERDIR=/home/${USER}
 ################# system variables file ################################
@@ -9,10 +15,10 @@ export SRCBOOTINIFILE=boot4.cmd
 ################# device hostname ######################################
 export DEV_HOSTNAME="orange"
 ################# ssh keys #############################################
-export SSH_KEY_FILES_LIST="/home/claudea/.ssh/id_rsa_camradeling.pub /home/claudea/.ssh/id_rsa_zero3.pub"
+export SSH_KEY_FILES_LIST="/path/to/your_key.pub"
 ################# vpn config file ######################################
 export VPN_CLIENT=OFF
-export VPN_CONFIG=/home/denisov/vpn/officehub.conf
+export VPN_CONFIG=/path/to/openvpn-client.conf
 ################# network configuration ################################
 export DEVICE_IFACE="eth0"
 export DEVICE_STATIC_ADDR="ON"
@@ -39,14 +45,14 @@ export USB_MASS_STORAGE=OFF
 export WIFI_CLIENT=OFF
 export WIFI_CLIENT_WLAN_NAME=wlan1
 export WLAN_SSID=Tamasha
-export WLAN_PSK=repzrepz
+export WLAN_PSK=
 ################ wifi access point #####################################
 export WIFI_AP=ON
 export WIFI_AP_WLAN_NAME=wlan0
 export WIFI_AP_ADDR=192.168.3.1
 export WIFI_AP_NETMASK=255.255.255.0
 export WIFI_AP_SSID=INP3
-export WIFI_AP_PSK=repzrepz
+export WIFI_AP_PSK=
 export WIFI_AP_BSS_TRANSITION=ON
 ################ quectel gsm modem #####################################
 # ON installs a udev hook that switches a plugged Quectel modem to ECM
@@ -58,8 +64,8 @@ export QUECTEL_ECM=ON
 export XRAY_CLIENT=ON
 # Client config to import. A vless:// REALITY share URL, a sing-box JSON
 # outbound, or a ready-made xray config.json - 0013 detects which. No credential
-# is ever a variable: uuid/pbk/sid exist only in this file, which is not in git.
-export XRAY_CONFIG=/home/denisov/progs/vpnsetup/hong_mobile_bundle/singbox-reality_honga.txt
+# is ever a variable: uuid/pbk/sid exist only in that file, which is not in git.
+export XRAY_CONFIG=/path/to/vless-reality-share-url.txt
 # Everything below has a working default; set only to override
 export XRAY_TPROXY_PORT=12345
 # The DNS inbound's own loopback address, on port 53. An address rather than a port
@@ -95,7 +101,7 @@ export XRAY_TCP_KEEPALIVE=20
 export WG_CLIENT=OFF
 # A wg-quick style client config: [Interface] PrivateKey/Address/DNS/MTU and
 # [Peer]s. The Endpoint must be an IP literal. Not in git: it holds the key.
-export WG_CONFIG=/home/denisov/vpn/camradeling_laptop-singapore/wireguard/generated/client_linux.conf
+export WG_CONFIG=/path/to/wireguard-client.conf
 # ON routes everything the LAN sends to the internet, and the LAN's DNS, through
 # wg0 (falling back to the direct path while wg-health finds the tunnel dead).
 # Needs XRAY_CLIENT=OFF - only one of them can own the LAN's way out. OFF only
