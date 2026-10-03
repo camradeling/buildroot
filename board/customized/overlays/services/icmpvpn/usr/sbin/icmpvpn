@@ -26,7 +26,7 @@ CONF=${DIR}/client.conf              # openvpn client profile, dev tun9
 UNIT=icmpvpn-openvpn.service         # transient unit, started by "on"
 DEV=tun9                             # fixed name, set in client.conf
 TABLE=2030                          # the ranges, all "dev ${DEV}"
-PREF_LAN=8990                       # forwarded LAN packets
+PREF_LAN=8990                       # forwarded LAN ICMP
 PREF_BOX=8995                       # the box's own packets, ahead of xray's 9000+
 PREFIXES=${DIR}/google-v4.txt
 STATE=/media/data/icmpvpn.on    # the persistent on/off choice
@@ -53,8 +53,15 @@ routes_add()
 	for pref in ${PREF_LAN} ${PREF_BOX}; do
 		while ip rule del pref ${pref} 2>/dev/null; do :; done
 	done
+	## LAN: ICMP only. TPROXY only *marks* the LAN's TCP/UDP in PREROUTING; the
+	## routing decision that hands it to xray's socket is rule 32765 ("fwmark 1
+	## lookup 100", local delivery). A rule here without a protocol match wins
+	## first and forwards those packets into tun9 instead of to xray, and that
+	## path does not work: every LAN connection to Google timed out while the
+	## box's own HTTPS and everyone's ping were fine (seen 2026-10-03). The
+	## LAN's TCP/UDP to Google belongs in xray like the rest of it anyway.
 	for i in ${IFACES}; do
-		ip rule add pref ${PREF_LAN} iif "${i}" lookup ${TABLE}
+		ip rule add pref ${PREF_LAN} iif "${i}" ipproto icmp lookup ${TABLE}
 	done
 	ip rule add pref ${PREF_BOX} iif lo lookup ${TABLE}
 	## The LAN's packets leave with the tunnel's address
