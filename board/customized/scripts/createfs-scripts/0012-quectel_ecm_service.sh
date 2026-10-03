@@ -11,13 +11,16 @@ etc/udev/rules.d/79-quectel-ecm-name.rules
 etc/systemd/system/quectel-ecm.service
 etc/systemd/system/quectel-ecm-up.service
 etc/systemd/system/modem-time.service
+etc/systemd/system/modem-datacall.service
 usr/libexec/quectel/quectel_at.inc
 usr/libexec/quectel/quectel_ecm.sh
-usr/sbin/modem-time"
+usr/sbin/modem-time
+usr/sbin/modem-datacall"
 
-## the two scripts are executed, everything else is config or a sourced library
+## the scripts are executed, everything else is config or a sourced library
 EXECUTABLES="usr/libexec/quectel/quectel_ecm.sh
-usr/sbin/modem-time"
+usr/sbin/modem-time
+usr/sbin/modem-datacall"
 
 ## Paths this option used to install, deleted unconditionally - ON or OFF - because
 ## output/target/ is not wiped between builds, so a file dropped from FILES stays

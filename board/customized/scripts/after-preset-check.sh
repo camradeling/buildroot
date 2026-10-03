@@ -209,7 +209,7 @@ check_feature USB_RNDIS   "${USB_NET_STATE}"     "dnsmasq_usb0.service" \
 check_feature VPN_CLIENT  "${VPN_CLIENT:-OFF}"   "openvpn@client.service" \
 	"/etc/openvpn/client.conf /etc/openvpn/configs/client.conf"
 check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
-	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service"
+	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service /usr/sbin/modem-datacall /etc/systemd/system/modem-datacall.service"
 check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service xray-health.timer xray-health.service" \
 	"/etc/xray/config.json"
 check_feature WG_CLIENT   "${WG_CLIENT:-OFF}"    "wg-client.service wg-health.timer wg-health.service" \
@@ -278,6 +278,13 @@ if [[ "${QUECTEL_ECM:-OFF}" == "ON" ]]; then
 		fail "QUECTEL_ECM=ON but modem-time.service is not linked into" \
 			"sys-subsystem-net-devices-wwan0.device.wants, so nothing would" \
 			"set the clock from the modem"
+	fi
+	## And without this one a reboot can leave the modem registered with its data
+	## call down for good - wwan0 has a lease, the route is in, no packet leaves.
+	if [[ ! -L "${QECM_WANTS_DIR}/modem-datacall.service" ]]; then
+		fail "QUECTEL_ECM=ON but modem-datacall.service is not linked into" \
+			"sys-subsystem-net-devices-wwan0.device.wants, so nothing would" \
+			"redial the modem's data call"
 	fi
 fi
 

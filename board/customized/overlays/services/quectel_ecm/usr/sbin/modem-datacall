@@ -1,0 +1,102 @@
+#!/bin/bash
+# Keep the modem's data call connected for as long as wwan0 exists.
+#
+# quectel_ecm.sh asserts AT+QNETDEVCTL=1,1,1 (bind the call to the ECM device,
+# autoconnect on) once per plug-in, but that is configuration, not a connection,
+# and on the EC200A it is not enough:
+#
+#   - the plug-in run happens seconds after enumeration, before the modem has
+#     registered, so the call cannot be up yet - the fourth field of
+#     +QNETDEVCTL? is 0 and there is nothing to wait for in that script;
+#   - autoconnect does not actually redial. Measured on testbot4: after a reboot
+#     the modem registered (+CEREG: 0,1, carrier IP in +CGPADDR) and sat at
+#     "+QNETDEVCTL: 1,1,1,0" for good, and after every CFUN cycle or re-attach it
+#     does the same, still unbound 2.5 min later. Re-sending AT+QNETDEVCTL=1,1,1
+#     connects it within a second.
+#
+# In that state everything on the box looks healthy - wwan0 has a lease from the
+# modem's own DHCP server, the default route is in, 192.168.43.1 answers ping -
+# and not one packet reaches the carrier. So poll: registered but not connected
+# for two rounds in a row means redial.
+#
+# Started by the wwan0 device unit (see modem-datacall.service), the same
+# level-triggered shape as quectel-ecm-up.service.
+
+source /etc/system.vars 2>/dev/null
+
+LOG_TAG="modem_datacall"
+## Own scratch file, see modem-time for why
+AT_OUT="/run/modem_datacall.at"
+source /usr/libexec/quectel/quectel_at.inc
+
+## seconds between polls; the port is held for ~5s of each (two AT rounds)
+INTERVAL=15
+## consecutive "registered, not connected" polls before redialing - one is not
+## enough, the modem may be a second away from connecting on its own
+DOWN_ROUNDS=2
+
+if [ -z "${QUECTEL_ECM}" ] || [ "${QUECTEL_ECM}" != "ON" ]; then
+	exit 0
+fi
+
+PORT=""
+REG=""
+CONN=""
+
+## One poll, run under with_modem_lock and *not* in a $(...): it sets PORT, REG
+## and CONN in this shell, so the port found once is reused on every later poll.
+## Port discovery is itself an AT round, which is why it belongs under the lock;
+## it is redone only when the cached port stops answering.
+function poll_modem()
+{
+	local modem
+
+	REG=""
+	CONN=""
+	if [ -z "${PORT}" ]; then
+		modem=$(find_modem) || return 1
+		PORT=$(find_at_port "$(list_ports ${modem})") || { PORT=""; return 1; }
+	fi
+
+	REG=$(at_cmd ${PORT} 'AT+CEREG?' 1 | sed -n -E 's/.*\+CEREG: *[0-9]+,([0-9]+).*/\1/p' | head -1)
+	if [ -z "${REG}" ]; then
+		PORT=""
+		return 1
+	fi
+	CONN=$(at_cmd ${PORT} 'AT+QNETDEVCTL?' 1 | sed -n -E 's/.*\+QNETDEVCTL: *[0-9]+,[0-9]+,[0-9]+,([0-9]+).*/\1/p' | head -1)
+}
+
+function redial()
+{
+	at_cmd ${PORT} 'AT+QNETDEVCTL=1,1,1' 3 | grep -q "OK"
+}
+
+down=0
+last=""
+while true; do
+	with_modem_lock poll_modem
+
+	state="registration=${REG:-?} connected=${CONN:-?}"
+	if [ "${state}" != "${last}" ]; then
+		log "${state}${PORT:+ on ${PORT}}"
+		last="${state}"
+	fi
+
+	## 1 home, 5 roaming: the only states in which a data call can come up
+	if [[ "${REG}" == "1" || "${REG}" == "5" ]] && [ "${CONN}" == "0" ]; then
+		down=$((down + 1))
+		if [ ${down} -ge ${DOWN_ROUNDS} ]; then
+			if with_modem_lock redial; then
+				log "registered but the data call was down, AT+QNETDEVCTL=1,1,1 accepted"
+			else
+				log "ERROR: registered, data call down, and the modem refused AT+QNETDEVCTL=1,1,1"
+			fi
+			down=0
+			last=""
+		fi
+	else
+		down=0
+	fi
+
+	sleep ${INTERVAL}
+done

@@ -93,7 +93,11 @@ function ensure_netdev_bound()
 
 	case "${state}" in
 	1,1,*)
-		log "data call already bound to the net device (+QNETDEVCTL: ${state})"
+		## Bound and set to autoconnect. The fourth field, connected, is
+		## usually still 0 this early - the modem has not registered yet - and
+		## autoconnect does not reliably bring it up afterwards either, so
+		## keeping it connected is modem-datacall's job, not this one's.
+		log "data call bound to the net device (+QNETDEVCTL: ${state}), modem-datacall keeps it connected"
 		return 0
 		;;
 	esac
