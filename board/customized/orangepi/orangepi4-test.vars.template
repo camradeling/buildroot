@@ -119,3 +119,13 @@ export WG_LAN_IFACES="usb0 wlan0"
 # default 1420 the MSS clamp let through segments the server cannot forward into
 # its end of the tunnel - every TLS handshake took 5-6 s waiting on PMTU recovery.
 export WG_MTU=1392
+################ Google ranges over OpenVPN (icmpvpn) ####################
+# ON installs "icmpvpn on|off|status": an openvpn client to singaserv that
+# carries Google's IPv4 ranges only - the carrier drops them all, ping included,
+# and the xray tunnel carries no ICMP. Its own connection rides the xray tunnel,
+# so it needs XRAY_CLIENT=ON and XRAY_BOARD_TUNNEL=ON, and VPN_CLIENT=OFF. The
+# tunnel is switched on the board; this only puts the tool in the image.
+export ICMPVPN=ON
+# The board's openvpn client profile, issued on singaserv by
+# openvpn/server/add-client.sh. Not in git: it holds the key.
+export ICMPVPN_CONFIG=/path/to/openvpn-icmpvpn-client.conf

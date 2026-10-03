@@ -212,6 +212,8 @@ check_feature QUECTEL_ECM "${QUECTEL_ECM:-OFF}"  "" \
 	"/etc/udev/rules.d/79-quectel-ecm-name.rules /etc/udev/rules.d/99-quectel-ecm.rules /usr/libexec/quectel/quectel_ecm.sh /usr/libexec/quectel/quectel_at.inc /usr/sbin/modem-time /etc/systemd/system/modem-time.service /usr/sbin/modem-datacall /etc/systemd/system/modem-datacall.service"
 check_feature XRAY_CLIENT  "${XRAY_CLIENT:-OFF}"  "xray.service xray-health.timer xray-health.service" \
 	"/etc/xray/config.json"
+check_feature ICMPVPN   "${ICMPVPN:-OFF}"     "icmpvpn.service" \
+	"/etc/icmpvpn/client.conf /usr/sbin/icmpvpn /etc/icmpvpn/google-v4.txt"
 check_feature WG_CLIENT   "${WG_CLIENT:-OFF}"    "wg-client.service wg-health.timer wg-health.service" \
 	"/etc/wireguard/wg0.conf"
 

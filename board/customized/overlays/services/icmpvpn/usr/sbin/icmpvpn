@@ -1,0 +1,125 @@
+#!/bin/bash
+# Send Google's address ranges - and only those - through an OpenVPN tunnel to
+# singaserv, so the bench can ping Google from the board and from the LAN.
+#
+#   icmpvpn on       start the tunnel and route the ranges into it
+#   icmpvpn off      stop it; those ranges go back to the normal paths
+#   icmpvpn status   tunnel state, routes, and a ping to Google through it
+#
+# Why a tunnel at all: the carrier drops every packet to Google's ranges (ping
+# included; only 8.8.8.8/8.8.4.4 answer), and the xray tunnel carries TCP and
+# UDP, never ICMP. OpenVPN carries whole IP packets, and its own UDP connection
+# to singaserv rides the xray tunnel like the rest of the board's traffic
+# (XRAY_BOARD_TUNNEL=ON), so the carrier sees only xray.
+#
+# The choice persists: "on" writes ${STATE} on the data partition, and
+# icmpvpn.service runs "icmpvpn on" at boot when it is there.
+
+source /etc/system.vars 2>/dev/null
+
+## Everything lives in one directory. In the image that is /etc/icmpvpn; a copy
+## run from /media/data/icmpvpn (installed by hand on a live board, where /etc
+## is tmpfs) uses its own directory and survives reboots there.
+DIR=$(dirname "$(readlink -f "$0")")
+[ "${DIR}" = /usr/sbin ] && DIR=/etc/icmpvpn
+CONF=${DIR}/client.conf              # openvpn client profile, dev tun9
+UNIT=icmpvpn-openvpn.service         # transient unit, started by "on"
+DEV=tun9                             # fixed name, set in client.conf
+TABLE=2030                          # the ranges, all "dev ${DEV}"
+PREF_LAN=8990                       # forwarded LAN packets
+PREF_BOX=8995                       # the box's own packets, ahead of xray's 9000+
+PREFIXES=${DIR}/google-v4.txt
+STATE=/media/data/icmpvpn.on    # the persistent on/off choice
+## www.google.com from Singapore. Not every Google address answers ICMP even
+## from outside (142.250.196.4 does not), so this one was checked from singaserv.
+PING_TARGET=142.251.157.119
+IFACES=${XRAY_LAN_IFACES:-"usb0 wlan0"}
+
+log() { logger -t icmpvpn "$*"; echo "$*"; }
+die() { log "ERROR: $*"; exit 1; }
+
+[ -f ${CONF} ] || die "${CONF} missing"
+
+routes_add()
+{
+	local n=0 p
+	ip route flush table ${TABLE} 2>/dev/null
+	while read -r p; do
+		case "${p}" in ''|\#*) continue ;; esac
+		ip route replace "${p}" dev ${DEV} table ${TABLE} && n=$((n + 1))
+	done < ${PREFIXES}
+	## Rules point at the table; with no tunnel the table is empty and the
+	## lookup falls through, so a dead tunnel never blackholes anything.
+	for pref in ${PREF_LAN} ${PREF_BOX}; do
+		while ip rule del pref ${pref} 2>/dev/null; do :; done
+	done
+	for i in ${IFACES}; do
+		ip rule add pref ${PREF_LAN} iif "${i}" lookup ${TABLE}
+	done
+	ip rule add pref ${PREF_BOX} iif lo lookup ${TABLE}
+	## The LAN's packets leave with the tunnel's address
+	iptables -t nat -C POSTROUTING -o ${DEV} -j MASQUERADE 2>/dev/null ||
+		iptables -t nat -A POSTROUTING -o ${DEV} -j MASQUERADE
+	log "${n} Google ranges -> ${DEV} (table ${TABLE})"
+}
+
+routes_del()
+{
+	for pref in ${PREF_LAN} ${PREF_BOX}; do
+		while ip rule del pref ${pref} 2>/dev/null; do :; done
+	done
+	ip route flush table ${TABLE} 2>/dev/null
+	while iptables -t nat -D POSTROUTING -o ${DEV} -j MASQUERADE 2>/dev/null; do :; done
+}
+
+wait_dev()
+{
+	local t=0
+	while [ ${t} -lt ${1} ]; do
+		ip -4 addr show ${DEV} 2>/dev/null | grep -q inet && return 0
+		sleep 1
+		t=$((t + 1))
+	done
+	return 1
+}
+
+case "${1:-status}" in
+on)
+	touch ${STATE} || die "cannot write ${STATE}"
+	if ! systemctl is-active --quiet ${UNIT}; then
+		systemctl reset-failed ${UNIT} 2>/dev/null
+		## transient unit: restarted if openvpn dies, gone after "off"
+		systemd-run --unit=${UNIT%.service} --property=Restart=always \
+			--property=RestartSec=10 \
+			/usr/sbin/openvpn --cd ${DIR} --config ${CONF} > /dev/null ||
+			die "could not start openvpn"
+	fi
+	wait_dev 30 || die "${DEV} got no address in 30s - see journalctl -u ${UNIT}"
+	routes_add
+	;;
+## Called by openvpn itself (up/down in client.conf), so a reconnect re-adds
+## the routes the old tun device took with it
+up)
+	[ -f ${STATE} ] && routes_add
+	;;
+down)
+	routes_del
+	;;
+off)
+	rm -f ${STATE}
+	routes_del
+	systemctl stop ${UNIT} 2>/dev/null
+	log "off: Google ranges back on the normal paths"
+	;;
+status)
+	echo "choice:  $([ -f ${STATE} ] && echo on || echo off) (persists across reboots)"
+	echo "tunnel:  $(systemctl is-active ${UNIT}) $(ip -4 -br addr show ${DEV} 2>/dev/null | awk '{print $3}')"
+	echo "routes:  $(ip route show table ${TABLE} 2>/dev/null | wc -l) in table ${TABLE}, rules: $(ip rule | grep -c "lookup ${TABLE}")"
+	echo "path to ${PING_TARGET}: $(ip route get ${PING_TARGET} 2>/dev/null | head -1)"
+	ping -c3 -W3 ${PING_TARGET} | tail -1
+	;;
+*)
+	echo "usage: $0 on|off|status" >&2
+	exit 1
+	;;
+esac

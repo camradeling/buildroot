@@ -1,0 +1,21 @@
+[Unit]
+Description=Google ranges through OpenVPN to singaserv, if icmpvpn was left on
+# The switch is "icmpvpn on|off" and the choice is /media/data/icmpvpn.on, the
+# only place on this board that survives a reboot. No choice, nothing started.
+ConditionPathExists=/media/data/icmpvpn.on
+# The profile ships only with ICMPVPN=ON (0015); without it there is nothing to run.
+ConditionPathExists=/etc/icmpvpn/client.conf
+# openvpn's UDP to singaserv rides the xray tunnel, so start after xray has
+# set up the board's routing; "on" waits for tun9 to come up anyway
+After=network-online.target xray.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/icmpvpn on
+# "on" waits up to 30s for tun9
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
