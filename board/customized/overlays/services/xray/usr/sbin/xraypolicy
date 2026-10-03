@@ -285,6 +285,7 @@ board_dns_del()
 ##   pref 9010  iif lo  to <XRAY_SERVER>  lookup main
 ##   pref 9020  iif lo  to 1.1.1.1 tcp dport 80  lookup main
 ##   pref 9030  iif lo  udp dport 123  lookup main
+##   pref 9035  iif lo  icmp  lookup main
 ##   pref 9040  iif lo  lookup 2022           (default dev singtun0)
 ##
 ## "iif lo" is how ip rule says "generated on this box": forwarded LAN traffic
@@ -295,6 +296,11 @@ board_dns_del()
 ## loop guard: xray's own connection to the server must not enter the tunnel
 ## it carries. 9020 is xray-health's direct probe, which has to be direct to
 ## mean anything. 9030 is NTP: a clock that never syncs breaks REALITY.
+## 9035 is ICMP: VLESS carries only TCP and UDP, so a ping routed into singtun0
+## is dropped by xray and the box could not ping anything at all. Direct, the
+## same as the LAN's ICMP, which TPROXY never touches (tcp/udp rules only) and
+## which leaves through wwan0's MASQUERADE - ping measures the carrier path,
+## not the tunnel; xray-health's probes are what measure the tunnel.
 ##
 ## dhclient on wwan0 sends from a raw socket, which routing does not apply to.
 ##
@@ -306,7 +312,7 @@ BOARD_PROBE=1.1.1.1
 
 board_tunnel_del()
 {
-	for _p in 9000 9010 9020 9030 9040; do
+	for _p in 9000 9010 9020 9030 9035 9040; do
 		while ip rule del pref ${_p} 2>/dev/null; do :; done
 	done
 	ip route flush table ${BOARD_TABLE} 2>/dev/null
@@ -327,8 +333,9 @@ board_tunnel_add()
 	ip rule add pref 9010 iif lo to "${XRAY_SERVER}" lookup main || return 1
 	ip rule add pref 9020 iif lo to ${BOARD_PROBE} ipproto tcp dport 80 lookup main || return 1
 	ip rule add pref 9030 iif lo ipproto udp dport 123 lookup main || return 1
+	ip rule add pref 9035 iif lo ipproto icmp lookup main || return 1
 	ip rule add pref 9040 iif lo lookup ${BOARD_TABLE} || return 1
-	log "box traffic: default via ${TUN_IFACE} (excluded: ${XRAY_SERVER}, the direct probe, NTP, connected subnets)"
+	log "box traffic: default via ${TUN_IFACE} (excluded: ${XRAY_SERVER}, the direct probe, NTP, ICMP, connected subnets)"
 }
 
 ## The down state: direct, unless the kill switch says there is no down state.
