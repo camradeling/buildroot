@@ -43,6 +43,13 @@ LAN_IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
 KILLSWITCH=${XRAY_KILLSWITCH:-OFF}
 ## The box's own traffic through singtun0 too, not only its DNS (step 5).
 BOARD_TUNNEL=${XRAY_BOARD_TUNNEL:-OFF}
+## systemd-resolved's DNSSEC (allow-downgrade) and opportunistic DoT on singtun0,
+## i.e. for the box's own lookups through the tunnel. ON keeps them, and is what
+## a chained exit (hongaserv -> singaserv) needs; OFF turns them off on that
+## link only, for an exit where they break resolution (tokyoserv: every name
+## failed "DNSSEC validation failed: missing-key"). Applied by xraypolicy.
+BOARD_DNSSEC=${XRAY_BOARD_DNSSEC:-ON}
+BOARD_DOT=${XRAY_BOARD_DOT:-ON}
 ## TCP keepalive on the tunnel's own connections to the server, in seconds of
 ## idle before the first probe. Unset or OFF leaves xray's default, which is not
 ## short enough for every path: measured on testbot4's carrier (a
@@ -112,6 +119,8 @@ sed -i -E "s|export XRAY_DNS_UPSTREAM=.*|export XRAY_DNS_UPSTREAM=${DNS_UPSTREAM
 sed -i -E "s|export XRAY_PROBE_PORT=.*|export XRAY_PROBE_PORT=${PROBE_PORT}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 sed -i -E "s|export XRAY_LAN_IFACES=.*|export XRAY_LAN_IFACES=\"${LAN_IFACES}\"|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 sed -i -E "s|export XRAY_KILLSWITCH=.*|export XRAY_KILLSWITCH=${KILLSWITCH}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+sed -i -E "s|export XRAY_BOARD_DNSSEC=.*|export XRAY_BOARD_DNSSEC=${BOARD_DNSSEC}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
+sed -i -E "s|export XRAY_BOARD_DOT=.*|export XRAY_BOARD_DOT=${BOARD_DOT}|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
 ## Written again after the outbound is parsed; empty until then, so an OFF or a
 ## failed build cannot leave a stale server address behind.
 sed -i -E "s|export XRAY_BOARD_TUNNEL=.*|export XRAY_BOARD_TUNNEL=OFF|g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
@@ -150,6 +159,8 @@ sane_field XRAY_DNS_ADDR "${DNS_ADDR}"
 sane_field XRAY_DNS_UPSTREAM "${DNS_UPSTREAM}"
 [[ "${PROBE_PORT}" =~ ^[0-9]+$ ]] || fail "XRAY_PROBE_PORT=${PROBE_PORT} is not a number"
 [[ "${BOARD_TUNNEL}" == "ON" || "${BOARD_TUNNEL}" == "OFF" ]] || fail "XRAY_BOARD_TUNNEL=${BOARD_TUNNEL}, only ON or OFF"
+[[ "${BOARD_DNSSEC}" == "ON" || "${BOARD_DNSSEC}" == "OFF" ]] || fail "XRAY_BOARD_DNSSEC=${BOARD_DNSSEC}, only ON or OFF"
+[[ "${BOARD_DOT}" == "ON" || "${BOARD_DOT}" == "OFF" ]] || fail "XRAY_BOARD_DOT=${BOARD_DOT}, only ON or OFF"
 
 ## One value for both idle and interval. On Linux an answered probe re-arms the
 ## timer from the idle threshold, so on a healthy silent connection the probe

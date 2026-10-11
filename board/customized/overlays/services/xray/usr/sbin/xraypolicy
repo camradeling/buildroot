@@ -258,8 +258,29 @@ board_dns_add()
 	resolvectl default-route ${TUN_IFACE} yes
 	resolvectl llmnr ${TUN_IFACE} no
 	resolvectl mdns ${TUN_IFACE} no
+	## DNSSEC and DoT per exit (XRAY_BOARD_DNSSEC/XRAY_BOARD_DOT, see 0013). ON
+	## sets resolved's own defaults explicitly, so the link does not depend on how
+	## systemd was built; the chained hongaserv -> singaserv exit needs them.
+	## OFF is for an exit where they break the box's DNS: through tokyoserv,
+	## resolved's allow-downgrade ended up with the server marked as unable to
+	## serve DNSKEY/DS, although full-size EDNS answers came back on every path
+	## when asked by hand, and from then on failed every name with "DNSSEC
+	## validation failed: missing-key" - box DNS dead, the LAN (dnsmasq via
+	## dns-in) fine. reset-server-features did not clear it; dnssec no did, at
+	## once (2026-10-11).
+	if [ "${XRAY_BOARD_DNSSEC:-ON}" = "OFF" ]; then
+		resolvectl dnssec ${TUN_IFACE} no
+	else
+		resolvectl dnssec ${TUN_IFACE} allow-downgrade
+	fi
+	if [ "${XRAY_BOARD_DOT:-ON}" = "OFF" ]; then
+		resolvectl dnsovertls ${TUN_IFACE} no
+	else
+		resolvectl dnsovertls ${TUN_IFACE} opportunistic
+	fi
 	resolvectl flush-caches
-	log "box DNS: systemd-resolved -> ${TUN_DNS} on ${TUN_IFACE} (exclusive, through the tunnel)"
+	log "box DNS: systemd-resolved -> ${TUN_DNS} on ${TUN_IFACE} (exclusive, through the tunnel," \
+		"DNSSEC ${XRAY_BOARD_DNSSEC:-ON}, DoT ${XRAY_BOARD_DOT:-ON})"
 }
 
 board_dns_del()
