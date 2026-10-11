@@ -17,9 +17,13 @@ OVERLAY_DIR="${PWD}/board/customized/overlays/services/icmpvpn"
 
 ## <relative path in the overlay> -> installed as ${TARGET_DIR}/<same path>
 FILES="usr/sbin/icmpvpn
-etc/icmpvpn/google-v4.txt
-etc/systemd/system/icmpvpn.service"
+etc/icmpvpn/google-v4.txt"
 PROFILE=etc/icmpvpn/client.conf
+## The unit ships whatever the switch says, like every other optional service
+## (CLAUDE.md, "Optional services"): preset-all enables it either way, and its
+## ConditionPathExists= on ${PROFILE} is what keeps it inert with ICMPVPN=OFF.
+## after-preset-check insists on finding it.
+UNIT=etc/systemd/system/icmpvpn.service
 
 fail()
 {
@@ -32,6 +36,10 @@ fail()
 for f in ${FILES} ${PROFILE}; do
 	delete_file_silent ${TARGET_DIR}/${f}
 done
+
+create_dir $(dirname ${TARGET_DIR}/${UNIT})
+copy_file ${OVERLAY_DIR}/${UNIT} ${TARGET_DIR}/${UNIT}
+[[ -f ${TARGET_DIR}/${UNIT} ]] || fail "${UNIT} was not installed into the target"
 
 ## after-preset-check reads the switch back from the image
 sed -i -E "s/export ICMPVPN=.*/export ICMPVPN=${ICMPVPN:-OFF}/g" ${TARGET_DIR}/${SYSTEM_VARS_FILE}
