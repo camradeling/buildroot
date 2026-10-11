@@ -283,3 +283,36 @@ function create_dir()
 		echo -e "INFO: directory ${BGreen} ${DIR} $NORMAL created"
 	fi
 }
+
+## icmpvpn's openvpn does not dial its server: it talks to a dokodemo-door relay
+## on loopback that 0013 puts in xray's config, and xray carries the packets to
+## the profile's real remote through the proxy (0015 rewrites the profile to
+## match). This way the carrier sees only xray, also when the openvpn server is
+## the xray server itself, whose address the board tunnel has to leave out.
+ICMPVPN_RELAY_PORT=${ICMPVPN_RELAY_PORT:-11940}
+
+## Sets ICMPVPN_REMOTE_HOST/PORT and ICMPVPN_NET (udp|tcp, as xray names it)
+## from the first "remote" of an openvpn client profile. Returns 1 with the
+## reason in ICMPVPN_PARSE_ERR.
+function icmpvpn_parse_remote()
+{
+	local profile=$1 line proto
+	ICMPVPN_REMOTE_HOST="" ICMPVPN_REMOTE_PORT="" ICMPVPN_NET="" ICMPVPN_PARSE_ERR=""
+
+	line=$(grep -m1 -E '^[[:space:]]*remote[[:space:]]' "${profile}" | tr -d '\r')
+	[[ -n "${line}" ]] || { ICMPVPN_PARSE_ERR="no 'remote' line in ${profile}"; return 1; }
+	read -r _ ICMPVPN_REMOTE_HOST ICMPVPN_REMOTE_PORT proto <<< "${line}"
+	ICMPVPN_REMOTE_PORT=${ICMPVPN_REMOTE_PORT:-1194}
+	## a proto on the remote line wins over the "proto" directive
+	[[ -n "${proto}" ]] || proto=$(sed -n -E 's/^[[:space:]]*proto[[:space:]]+([^[:space:]]+).*/\1/p' "${profile}" | head -1 | tr -d '\r')
+	case "${proto:-udp}" in
+	udp|udp4)			ICMPVPN_NET=udp ;;
+	tcp|tcp4|tcp-client|tcp4-client) ICMPVPN_NET=tcp ;;
+	*)	ICMPVPN_PARSE_ERR="proto '${proto}' in ${profile}, only udp or tcp(-client) over IPv4"; return 1 ;;
+	esac
+	[[ "${ICMPVPN_REMOTE_PORT}" =~ ^[0-9]+$ ]] ||
+		{ ICMPVPN_PARSE_ERR="remote port '${ICMPVPN_REMOTE_PORT}' in ${profile} is not a number"; return 1; }
+	[[ "${ICMPVPN_REMOTE_HOST}" =~ ^[A-Za-z0-9.-]+$ ]] ||
+		{ ICMPVPN_PARSE_ERR="remote host '${ICMPVPN_REMOTE_HOST}' in ${profile} is not a plain name or address"; return 1; }
+	return 0
+}

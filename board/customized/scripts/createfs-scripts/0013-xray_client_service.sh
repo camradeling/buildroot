@@ -335,6 +335,25 @@ vless://*)
 	;;
 esac
 
+## icmpvpn's openvpn reaches its server through a relay inbound here (see
+## icmpvpn_parse_remote in functions.inc), aimed at the profile's own remote.
+## 0015 checks the rest of the profile; this only needs where it connects to.
+RELAY_INBOUND=""
+if [[ "${ICMPVPN:-OFF}" == "ON" ]]; then
+	[[ -r "${ICMPVPN_CONFIG}" ]] || fail "ICMPVPN_CONFIG=${ICMPVPN_CONFIG}: not found or not readable by $(id -un)"
+	icmpvpn_parse_remote "${ICMPVPN_CONFIG}" || fail "ICMPVPN_CONFIG: ${ICMPVPN_PARSE_ERR}"
+	if [[ "${XRAY_VERBATIM:-OFF}" == "ON" ]]; then
+		grep -q "\"port\"[[:space:]]*:[[:space:]]*${ICMPVPN_RELAY_PORT}" "${XRAY_CONF}" ||
+			fail "ICMPVPN=ON but ${XRAY_CONFIG} has no inbound on port ${ICMPVPN_RELAY_PORT}," \
+				"which is what icmpvpn's openvpn dials - give it a dokodemo-door inbound on" \
+				"127.0.0.1:${ICMPVPN_RELAY_PORT} (${ICMPVPN_NET}) forwarding to" \
+				"${ICMPVPN_REMOTE_HOST}:${ICMPVPN_REMOTE_PORT} through the proxy"
+	fi
+	RELAY_INBOUND="
+    { \"tag\": \"icmpvpn-relay\", \"listen\": \"127.0.0.1\", \"port\": ${ICMPVPN_RELAY_PORT}, \"protocol\": \"dokodemo-door\",
+      \"settings\": { \"network\": \"${ICMPVPN_NET}\", \"address\": \"${ICMPVPN_REMOTE_HOST}\", \"port\": ${ICMPVPN_REMOTE_PORT} } },"
+fi
+
 #####################################################################
 ## 4. every field the outbound needs, or nothing
 #####################################################################
@@ -352,7 +371,8 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
 	#####################################################################
 	## Three dokodemo-door inbounds: the TPROXY one the LAN's packets are handed
 	## to, a DNS one on loopback for the LAN resolvers (see step 6), and the
-	## health check's probe (see xray-health). The routing rules touch none of
+	## health check's probe (see xray-health) - four with ICMPVPN=ON, whose
+	## openvpn relay is the fourth. The routing rules touch none of
 	## them - the first outbound is the default, so everything that reaches those
 	## goes into the tunnel, which is the requirement.
 	##
@@ -423,7 +443,7 @@ if [[ "${XRAY_VERBATIM:-OFF}" != "ON" ]]; then
     { "tag": "dns-in", "listen": "${DNS_ADDR}", "port": 53, "protocol": "dokodemo-door",
       "settings": { "network": "tcp,udp", "address": "${DNS_UPSTREAM}", "port": 53 } },
     { "tag": "probe", "listen": "127.0.0.1", "port": ${PROBE_PORT}, "protocol": "dokodemo-door",
-      "settings": { "network": "tcp", "address": "1.1.1.1", "port": 80 } },
+      "settings": { "network": "tcp", "address": "1.1.1.1", "port": 80 } },${RELAY_INBOUND}
     { "tag": "tun", "protocol": "tun",
       "settings": { "name": "${TUN_IFACE}", "mtu": 1400, "gateway": ["${TUN_ADDR}"] } }
   ],

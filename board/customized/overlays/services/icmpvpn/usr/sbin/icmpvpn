@@ -1,6 +1,6 @@
 #!/bin/bash
-# Send Google's address ranges - and only those - through an OpenVPN tunnel to
-# singaserv, so the bench can ping Google from the board and from the LAN.
+# Send Google's address ranges - and only those - through an OpenVPN tunnel,
+# so the bench can ping Google from the board and from the LAN.
 #
 #   icmpvpn on       start the tunnel and route the ranges into it
 #   icmpvpn off      stop it; those ranges go back to the normal paths
@@ -8,9 +8,10 @@
 #
 # Why a tunnel at all: the carrier drops every packet to Google's ranges (ping
 # included; only 8.8.8.8/8.8.4.4 answer), and the xray tunnel carries TCP and
-# UDP, never ICMP. OpenVPN carries whole IP packets, and its own UDP connection
-# to singaserv rides the xray tunnel like the rest of the board's traffic
-# (XRAY_BOARD_TUNNEL=ON), so the carrier sees only xray.
+# UDP, never ICMP. OpenVPN carries whole IP packets, and its own connection
+# goes to xray's relay inbound on loopback (client.conf's remote, set by 0015),
+# which carries it to the real server through the proxy, so the carrier sees
+# only xray.
 #
 # The choice persists: "on" writes ${STATE} on the data partition, and
 # icmpvpn.service runs "icmpvpn on" at boot when it is there.
