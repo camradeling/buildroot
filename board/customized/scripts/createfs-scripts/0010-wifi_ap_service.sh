@@ -88,4 +88,27 @@ if [[ -f "${DNSMASQ_CONF}" ]] && [[ ! -z "${WIFI_AP_ADDR}" ]] && [[ ! -z "${WIFI
 	print_green "dnsmasq listen-address=${WIFI_AP_ADDR} dhcp-range=${RANGE_START},${RANGE_END},12h"
 fi
 
+## Sticky client addresses (off unless a vars file asks). /var is on the tmpfs
+## overlay, so the default lease file dies with each boot and a returning client
+## can land on a different address; keep it on the data partition instead.
+## dhcp-authoritative: dnsmasq is the only DHCP server on this segment, so it may
+## grant a client the address it asks for even without a lease on record.
+if [[ -f "${DNSMASQ_CONF}" ]] && [[ "${WIFI_AP_STICKY_LEASES:-OFF}" == "ON" ]]; then
+	echo "dhcp-leasefile=/media/data/dnsmasq_wlan0.leases" >> ${DNSMASQ_CONF}
+	echo "dhcp-authoritative" >> ${DNSMASQ_CONF}
+	print_green "WIFI_AP_STICKY_LEASES=ON (leases on /media/data, authoritative)"
+fi
+
+## fixed addresses: WIFI_AP_DHCP_HOSTS="<mac>,<ip> [<mac>,<ip> ...]"
+if [[ -f "${DNSMASQ_CONF}" ]] && [[ ! -z "${WIFI_AP_DHCP_HOSTS}" ]]; then
+	for _host in ${WIFI_AP_DHCP_HOSTS}; do
+		if [[ ! "${_host}" =~ ^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2},([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+			print_red "ERROR: WIFI_AP_DHCP_HOSTS entry '${_host}' is not <mac>,<ip>"
+			exit 1
+		fi
+		echo "dhcp-host=${_host}" >> ${DNSMASQ_CONF}
+		print_green "dnsmasq dhcp-host=${_host}"
+	done
+fi
+
 exit 0
