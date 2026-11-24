@@ -62,8 +62,35 @@ echo $UDC_DRIVER > UDC
 #ln -s functions/mass_storage.usb0 configs/c.1/
 #echo "0x00" > bDeviceClass
 #echo $UDC_DRIVER > UDC
+## The bind above creates the gadget's net device as usb%d. The Quectel modem's
+## cdc_ether also registers as usb%d and is only renamed to wwan0 by udev ~100 ms
+## later, so on some boots it holds usb0 at the moment of the bind and the
+## gadget comes up as usb1 - and everything below, dnsmasq_usb0, netpolicy and
+## xraypolicy expect usb0. The kernel only takes an ifname pattern with %d, so
+## find the gadget by its fixed dev_addr and rename it once usb0 is free.
+gadget_ifname_usb0()
+{
+	local _mac _dev _i
+	_mac=$(tr -d "\0\n" < functions/rndis.usb0/dev_addr)
+	for _i in $(seq 50); do
+		for _dev in /sys/class/net/*; do
+			[ "$(cat ${_dev}/address 2>/dev/null)" == "${_mac}" ] || continue
+			_dev=${_dev##*/}
+			[ "${_dev}" == "usb0" ] && return 0
+			if [ ! -e /sys/class/net/usb0 ] && ip link set dev "${_dev}" name usb0 2>/dev/null; then
+				echo "usbstart: gadget interface ${_dev} renamed to usb0"
+				return 0
+			fi
+		done
+		sleep 0.2
+	done
+	echo "usbstart: ERROR: gadget interface (${_mac}) is not usb0 after 10 s" >&2
+	return 1
+}
+
 if [ ! -z ${USB_RNDIS} ] && [ ${USB_RNDIS} == "ON" ]; then
 	sleep 0.2
+	gadget_ifname_usb0
 	. /etc/profile.d/usbaddr.sh
 	ifconfig usb0 ${USB_ADDR} up
 	# usb0 is both a LAN and the last-resort uplink: if the USB host shares its

@@ -1,0 +1,20 @@
+# Installed by tools/systemd/install.sh, which fills in @USER@ and @REPO@.
+[Unit]
+Description=testbot4 uplink diagnostics (tools/testbot-diag.sh)
+Documentation=file:@REPO@/workplans/004-testbot-diag.md
+
+[Service]
+Type=oneshot
+User=@USER@
+# Not on the board's AP: skip the run instead of logging a wrong-network FAIL
+# every 5 minutes. The SSID comes from testbot-diag.conf, so this file holds
+# nothing that is not in git.
+ExecCondition=@REPO@/tools/testbot-probe.sh --check-ap
+ExecStart=@REPO@/tools/testbot-diag.sh --log-state ${STATE_DIRECTORY}
+# /var/lib/testbot-diag, owned by @USER@; testbot-probe.service shares it
+StateDirectory=testbot-diag
+# SSH is bounded at 120s inside the script; this is the backstop
+TimeoutStartSec=180
+SyslogIdentifier=testbot-diag
+# 1 (warnings) and 2 (FAIL) are findings, not a failed unit
+SuccessExitStatus=1 2

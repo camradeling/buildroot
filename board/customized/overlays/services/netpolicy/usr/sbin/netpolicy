@@ -137,7 +137,87 @@ nat_lan()
 	return 1
 }
 
+#####################################################################
+## Direct hosts (WIFI_AP_DIRECT_HOSTS, workplans/005-direct-hosts.md)
+#####################################################################
+## AP clients that use this box as a plain NAT router: no xray, no tunnelled
+## DNS, no icmpvpn, no WireGuard, no kill switch. One mark, set once, is what
+## every one of those layers honours:
+##
+##   mangle PREROUTING 1  -i wlan0 -j DIRECT
+##   mangle DIRECT        -s <ip> -m mac --mac-source <mac> [-m dscp --dscp <n>] -j MARK --set-xmark 0x10/0x10
+##   mangle DIRECT        -m mark --mark 0x10/0x10 -j ACCEPT
+##   ip rule pref 5100    fwmark 0x10/0x10 lookup main
+##
+## ACCEPT ends mangle PREROUTING for the packet, so xray's "-i wlan0 -j XRAY"
+## (appended by xraypolicy add, after this) never sees it - no TPROXY. Pref 5100
+## is ahead of wgpolicy (5200-5230) and icmpvpn (8990), and none of them deletes
+## it. xraypolicy's kill switch chain starts with a RETURN for the same mark.
+## Local delivery is unaffected (the local table is pref 0), and NAT is nat_lan's
+## MASQUERADE like everyone else's.
+##
+## MAC and IP both: routing cannot match a MAC, and an IP alone would hand the
+## bypass to any client that set that address by hand. dnsmasq hands out the IP
+## (0010 writes the dhcp-host lines from the same list).
+##
+## DSCP hosts ("<mac>,<ip>,<dscp>", workplans/006): the same rule with one more
+## match, so only the packets the client marked with that DSCP value bypass; the
+## rest of the host falls through to XRAY and is tunnelled like any client. The
+## client marks per process (tools/dscp-direct-run.sh, a cgroup + nft rule), and
+## marks every packet of the socket, so a flow never switches path half-way.
+##
+## Installed once, like the NAT rules, and inert until the device associates.
+## The mark and the pref are repeated in xraypolicy (killswitch_add) and
+## tools/testbot-diag.sh - keep them in step.
+DIRECT_CHAIN=DIRECT
+DIRECT_MARK=0x10/0x10
+DIRECT_PREF=5100
+
+direct_hosts()
+{
+	_iface=${WIFI_AP_WLAN_NAME:-wlan0}
+
+	## Rerunning the unit must leave exactly one copy of everything, and a list
+	## that became empty must leave nothing behind
+	while iptables -t mangle -D PREROUTING -i "${_iface}" -j ${DIRECT_CHAIN} 2>/dev/null; do :; done
+	iptables -t mangle -F ${DIRECT_CHAIN} 2>/dev/null
+	iptables -t mangle -X ${DIRECT_CHAIN} 2>/dev/null
+	while ip rule del pref ${DIRECT_PREF} 2>/dev/null; do :; done
+
+	[ -n "${WIFI_AP_DIRECT_HOSTS:-}" ] || return 0
+
+	## The same busybox trap as xraypolicy's: its ip applet has no "rule"
+	if ! ip -V 2>/dev/null | grep -q iproute2; then
+		log "ERROR: ip is not iproute2, direct hosts (${WIFI_AP_DIRECT_HOSTS}) stay tunnelled"
+		return 1
+	fi
+
+	iptables -t mangle -N ${DIRECT_CHAIN} || return 1
+	for _h in ${WIFI_AP_DIRECT_HOSTS}; do
+		IFS=',' read -r _mac _ip _dscp <<EOF_H
+${_h}
+EOF_H
+		if [ -n "${_dscp}" ]; then
+			iptables -t mangle -A ${DIRECT_CHAIN} -s "${_ip}" -m mac --mac-source "${_mac}" \
+				-m dscp --dscp "${_dscp}" -j MARK --set-xmark ${DIRECT_MARK} || return 1
+			log "direct host ${_mac} ${_ip}: DSCP ${_dscp} bypasses every tunnel, the rest is tunnelled"
+		else
+			iptables -t mangle -A ${DIRECT_CHAIN} -s "${_ip}" -m mac --mac-source "${_mac}" \
+				-j MARK --set-xmark ${DIRECT_MARK} || return 1
+			log "direct host ${_mac} ${_ip}: bypasses every tunnel"
+		fi
+	done
+	iptables -t mangle -A ${DIRECT_CHAIN} -m mark --mark ${DIRECT_MARK} -j ACCEPT || return 1
+	## -I 1: ahead of xraypolicy's XRAY jump, which is appended later
+	iptables -t mangle -I PREROUTING 1 -i "${_iface}" -j ${DIRECT_CHAIN} || return 1
+	ip rule add pref ${DIRECT_PREF} fwmark ${DIRECT_MARK} lookup main || return 1
+}
+
 RC=0
+
+## First, so the mark exists before xraypolicy boot builds the kill switch that
+## exempts it
+direct_hosts || RC=1
 
 nat_lan "${WIFI_AP_WLAN_NAME:-wlan0}" "${WIFI_AP_ADDR:-}" "${WIFI_AP_NETMASK:-255.255.255.0}" || RC=1
 

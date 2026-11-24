@@ -1,0 +1,10 @@
+[Unit]
+Description=testbot4 quick uplink probe every 30 seconds
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=30s
+AccuracySec=2s
+
+[Install]
+WantedBy=timers.target

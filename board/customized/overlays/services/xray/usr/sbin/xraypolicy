@@ -385,6 +385,10 @@ killswitch_add()
 
 	iptables -N ${KILL_CHAIN} 2>/dev/null
 	iptables -F ${KILL_CHAIN}
+	## Direct hosts (WIFI_AP_DIRECT_HOSTS) never depend on the tunnel, so a dead
+	## tunnel does not close their way out. The mark is set by netpolicy's DIRECT
+	## chain - keep 0x10/0x10 in step with it. Matches nothing with no direct hosts.
+	iptables -A ${KILL_CHAIN} -m mark --mark 0x10/0x10 -j RETURN
 	for _i in ${IFACES}; do
 		iptables -A ${KILL_CHAIN} -o "${_i}" -j RETURN
 	done

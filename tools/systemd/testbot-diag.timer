@@ -1,0 +1,12 @@
+[Unit]
+Description=testbot4 uplink diagnostics every 5 minutes
+
+[Timer]
+OnBootSec=2min
+# From the end of the previous run, so a slow run is never followed by another
+# one straight away
+OnUnitInactiveSec=5min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -52,6 +52,24 @@ export WIFI_AP_NETMASK=255.255.255.0
 export WIFI_AP_SSID=maloc
 export WIFI_AP_PSK=
 export WIFI_AP_BSS_TRANSITION=ON
+# Direct hosts: "<mac>,<ip> ..." - each device gets <ip> from dnsmasq, and
+# everything it sends goes straight out the uplink: no xray, no tunnelled DNS, no
+# icmpvpn, no WireGuard, and the kill switch does not apply to it. Both the MAC
+# and the IP must match, so a client that sets the same IP by hand stays
+# tunnelled. Turn off MAC randomisation ("private address") for this SSID on the
+# device. A device goes in this list or in WIFI_AP_DHCP_HOSTS, not both.
+# An optional third field "<mac>,<ip>,<dscp>" (1..63) narrows the bypass to the
+# packets carrying that DSCP value: the host keeps its fixed address and is
+# tunnelled as usual (DNS too), except for the process(es) the client marks -
+# run them with tools/dscp-direct-run.sh on the client, with the same DSCP.
+# Use 7: nothing sets it on its own (TOS 0x1c, all three RFC 1349 bits). Never
+# a value programs pick by themselves - 4 is TOS "lowdelay", which ssh sets on
+# every connection, so its SSH would go direct and then be reset when it
+# switches to "throughput" mid-connection.
+export WIFI_AP_DIRECT_HOSTS=""
+# DNS server DHCP gives direct hosts, reached directly - plain DNS on the
+# carrier, which forges some answers.
+export WIFI_AP_DIRECT_DNS=1.1.1.1
 
 ################# build secrets (never commit real values) #############
 ## Root password baked into images whose defconfig uses "$(BR_ROOT_PASSWD)".

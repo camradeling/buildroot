@@ -1,0 +1,14 @@
+# Installed by tools/systemd/install.sh, which fills in @USER@ and @REPO@.
+[Unit]
+Description=testbot4 quick uplink probe (tools/testbot-probe.sh)
+Documentation=file:@REPO@/workplans/004-testbot-diag.md
+
+[Service]
+Type=oneshot
+User=@USER@
+ExecCondition=@REPO@/tools/testbot-probe.sh --check-ap
+ExecStart=@REPO@/tools/testbot-probe.sh ${STATE_DIRECTORY}
+StateDirectory=testbot-diag
+# an OK -> FAIL edge runs the full diagnosis inline
+TimeoutStartSec=200
+SyslogIdentifier=testbot-probe

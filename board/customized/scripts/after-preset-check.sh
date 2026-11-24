@@ -404,6 +404,74 @@ if [[ "${WG_CLIENT:-OFF}" == "ON" ]]; then
 	fi
 fi
 
+## I. Direct hosts (WIFI_AP_DIRECT_HOSTS, workplans/005, 006). Two halves written by
+## different owners - dnsmasq's dhcp-host lines by 0010, the routing by netpolicy
+## from system.vars - and each one alone fails quietly: a fixed address that is
+## still tunnelled, or a bypass rule for an address nobody is given. And without
+## xt_mac the DIRECT chain cannot be built at all, which only shows on the board.
+WLAN_DNSMASQ="${TARGET_DIR}/etc/dnsmasq_wlan0.conf"
+DIRECT_LIST=""
+if [[ "${WIFI_AP:-OFF}" == "ON" ]]; then
+	DIRECT_LIST="${WIFI_AP_DIRECT_HOSTS:-}"
+	DIRECT_LIST="${DIRECT_LIST,,}"
+fi
+DIRECT_VARS="$(sed -n 's/^export WIFI_AP_DIRECT_HOSTS="\(.*\)"$/\1/p' "${VARS_FILE}")"
+if [[ "$(echo ${DIRECT_VARS})" != "$(echo ${DIRECT_LIST})" ]]; then
+	fail "WIFI_AP_DIRECT_HOSTS in /etc/system.vars is \"${DIRECT_VARS}\", expected" \
+		"\"${DIRECT_LIST}\" - netpolicy would bypass the tunnel for the wrong hosts"
+fi
+if [[ -n "${DIRECT_LIST}" ]]; then
+	DIRECT_FULL=0
+	DIRECT_DSCP=0
+	for _h in ${DIRECT_LIST}; do
+		IFS=',' read -r _mac _ip _dscp <<< "${_h}"
+		if [[ -n "${_dscp}" ]]; then
+			## DSCP host (workplans/006): fixed address, tunnelled DNS
+			DIRECT_DSCP=1
+			if ! grep -qxF "dhcp-host=${_mac},${_ip}" "${WLAN_DNSMASQ}"; then
+				fail "DSCP direct host ${_h} has no dhcp-host=${_mac},${_ip} line in" \
+					"/etc/dnsmasq_wlan0.conf, so it would not get its fixed address"
+			fi
+		else
+			DIRECT_FULL=1
+			if ! grep -qxF "dhcp-host=${_mac},set:direct,${_ip}" "${WLAN_DNSMASQ}"; then
+				fail "direct host ${_h} has no dhcp-host=...,set:direct,... line in" \
+					"/etc/dnsmasq_wlan0.conf, so it would not get its fixed address"
+			fi
+		fi
+	done
+	if (( DIRECT_FULL )) && ! grep -q '^dhcp-option=tag:direct,option:dns-server,' "${WLAN_DNSMASQ}"; then
+		fail "WIFI_AP_DIRECT_HOSTS is set but dnsmasq_wlan0.conf hands direct hosts" \
+			"no DNS server of their own, so their lookups would go through the tunnel"
+	fi
+	if (( ! DIRECT_FULL )) && grep -q 'set:direct\|tag:direct' "${WLAN_DNSMASQ}"; then
+		fail "WIFI_AP_DIRECT_HOSTS has only DSCP hosts but dnsmasq_wlan0.conf still" \
+			"has fully-direct lines"
+	fi
+	if (( DIRECT_DSCP )); then
+		if [[ -z "$(find "${TARGET_DIR}/lib/modules" -name 'xt_dscp.ko*' 2>/dev/null)" ]]; then
+			fail "WIFI_AP_DIRECT_HOSTS has a DSCP host but there is no xt_dscp.ko under" \
+				"/lib/modules (CONFIG_NETFILTER_XT_MATCH_DSCP=m in the kernel config?)"
+		fi
+		if [[ ! -e "${TARGET_DIR}/usr/lib/xtables/libxt_dscp.so" ]]; then
+			fail "WIFI_AP_DIRECT_HOSTS has a DSCP host but iptables has no dscp match (libxt_dscp.so)"
+		fi
+	fi
+	if [[ ! -x "${TARGET_DIR}/usr/sbin/netpolicy" ]]; then
+		fail "WIFI_AP_DIRECT_HOSTS is set but /usr/sbin/netpolicy, which installs" \
+			"the bypass, is not in the image"
+	fi
+	if [[ -z "$(find "${TARGET_DIR}/lib/modules" -name 'xt_mac.ko*' 2>/dev/null)" ]]; then
+		fail "WIFI_AP_DIRECT_HOSTS is set but there is no xt_mac.ko under /lib/modules" \
+			"(CONFIG_NETFILTER_XT_MATCH_MAC=m in the kernel config?)"
+	fi
+	if [[ ! -e "${TARGET_DIR}/usr/lib/xtables/libxt_mac.so" ]]; then
+		fail "WIFI_AP_DIRECT_HOSTS is set but iptables has no mac match (libxt_mac.so)"
+	fi
+elif [[ -f "${WLAN_DNSMASQ}" ]] && grep -q 'set:direct\|tag:direct' "${WLAN_DNSMASQ}"; then
+	fail "WIFI_AP_DIRECT_HOSTS is empty but dnsmasq_wlan0.conf still has direct-host lines"
+fi
+
 if [[ ${RC} -eq 0 ]]; then
 	print_green "INFO: after-preset-check: systemd unit gating matches ${VARS_FILE}"
 else

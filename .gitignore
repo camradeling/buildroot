@@ -18,3 +18,10 @@
 board/customized/orangepi/*.vars
 # legacy split-out WiFi PSKs, still sourced by build.sh if present
 board/customized/orangepi/*.secrets
+# testbot-diag.sh's addresses, key and SSID; tools/testbot-diag.conf.template is in git
+tools/testbot-diag.conf
+# OpenVPN client config with its private key and tls-crypt key - never in git
+testbot4-icmpvpn.conf
+*-icmpvpn.conf
+# vpn-gw-*.sh site values; the .env.template files are in git
+tools/vpn-gw-*.env

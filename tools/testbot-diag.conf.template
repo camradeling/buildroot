@@ -1,0 +1,16 @@
+# Config for testbot-diag.sh. Copy to testbot-diag.conf (same directory, not in
+# git) and fill in, or point TESTBOT_DIAG_CONF / -c at a copy elsewhere.
+
+## The board's address on its Wi-Fi AP (WIFI_AP_ADDR in the board's vars file)
+BOARD_ADDR=
+## SSH login; the key is optional - empty means ssh's own defaults/~/.ssh/config
+BOARD_SSH_USER=root
+BOARD_SSH_KEY=
+## The AP's SSID (WIFI_AP_SSID). When set, being on any other network is a FAIL
+## instead of a run that measures the wrong path. Empty skips the check.
+AP_SSID=
+## What the end-to-end checks resolve and fetch over HTTPS, from the board and
+## from this host
+E2E_HOST=api.anthropic.com
+## --watch log; empty means ~/testbot-diag.log
+WATCH_LOG=
