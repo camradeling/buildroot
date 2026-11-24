@@ -1,0 +1,14 @@
+[Unit]
+Description=gpsd
+Wants=network.target
+After=network.target sshd.service rc-local.service
+
+[Service]
+Type=simple
+ExecStart=/sbin/start-stop-daemon -S -x /sbin/gpsd -- -n -N -G -F /var/run/gpsd.sock /dev/ttyAMA0
+ExecStop=/sbin/start-stop-daemon -K -x /sbin/gpsd -- signal INT
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

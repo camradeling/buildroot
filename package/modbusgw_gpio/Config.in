@@ -1,0 +1,7 @@
+config BR2_PACKAGE_MODBUSGW_GPIO
+    bool "modbusgw_gpio"
+    depends on BR2_PACKAGE_MXML
+    help
+      Modbus TCP to GPIO gateway. Drives sysfs GPIOs from Modbus
+      holding register writes. Replacement for modbusgw on boards
+      with direct GPIO relay control (no UART/STM32).

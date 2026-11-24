@@ -1,0 +1,23 @@
+# Quectel modems (VID 2c7c): make sure the USB network function comes up as ECM
+# (AT+QCFG="usbnet",1) and not RNDIS, which we have no host driver for.
+#
+# Matched on the parent USB device so it fires once per plug-in instead of once
+# per serial interface. The switch itself runs as a systemd oneshot, because the
+# modem has to be reset afterwards and udev must not be blocked that long.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c7c", TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm.service"
+
+# The DHCP client for the ECM net device is deliberately *not* started from here.
+# There used to be a second rule:
+#
+#   SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", \
+#     TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
+#
+# and it never worked on this board, because 79-quectel-ecm-name.rules renames the
+# interface: the rename produces a second uevent with ACTION=move, the rule does
+# not match it, and the udev database entry is rewritten without SYSTEMD_WANTS. So
+# wwan0 came up only after a manual "systemctl start quectel-ecm-up.service".
+# quectel-ecm-up.service is now WantedBy= the wwan0 device unit instead, which is
+# level-triggered and needs no property to survive. See that unit for the evidence.
+#
+# The mode switch above stays on udev because there is no device unit for "a
+# Quectel appeared on USB" to hang it off.

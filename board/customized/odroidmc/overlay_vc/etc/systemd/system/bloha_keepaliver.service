@@ -1,0 +1,14 @@
+[Unit]
+Description = bloha_keepaliver Service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ifplugd.vars
+WorkingDirectory=/root/reedservice
+ExecStart=/sbin/start-stop-daemon -S -m -p ${PID_FILE} -x /root/reedservice/bloha_keepaliver
+ExecStop=/sbin/start-stop-daemon -K -x /root/reedservice/bloha_keepaliver -p ${PID_FILE} --remove-pidfile --signal INT
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

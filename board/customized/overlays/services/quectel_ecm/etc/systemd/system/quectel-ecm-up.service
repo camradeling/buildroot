@@ -1,0 +1,76 @@
+[Unit]
+Description=DHCP client for the Quectel ECM uplink (wwan0)
+# Pulled in by the wwan0 device unit (see [Install]), so it runs exactly when
+# there is a wwan0 to run on: no modem, no device unit, nothing started.
+#
+# BindsTo, not just After: systemd stops this unit when the device unit goes away,
+# which is the one thing the previous ifupdown shape could not do - it left an
+# address, a default route and an orphaned dhclient behind on every unplug, plus a
+# stale /run/network/ifstate entry that made the next "ifup wwan0" refuse to run.
+BindsTo=sys-subsystem-net-devices-wwan0.device
+After=sys-subsystem-net-devices-wwan0.device
+
+[Service]
+# Type=simple with dhclient in the foreground: the client is now the main process,
+# so systemd's lifetime and the lease's lifetime are the same thing.
+#
+# The old shape was Type=oneshot running "ifup wwan0", which daemonized dhclient
+# and then exited - and the default KillMode=control-group made systemd SIGTERM
+# everything left in the cgroup the moment it did. The journal caught it exactly:
+#
+#   dhclient[20761]: bound to 192.168.43.100 -- renewal in 40247 seconds.
+#   systemd[1]: quectel-ecm-up.service: Deactivated successfully.
+#
+# wwan0 kept its address and its route, because nothing removes those, so the link
+# looked healthy while having no client left to renew an 11-hour lease. That
+# needed a KillMode=process override to paper over; here there is nothing to
+# paper over.
+Type=simple
+ExecStartPre=/sbin/ip link set dev wwan0 up
+ExecStart=/sbin/dhclient wwan0 -d
+# Covers the lease dying while the device stays put - dhclient exiting on a
+# transient "receive_packet failed on wwan0: Network is down", say. It does not
+# cover the modem re-enumerating: BindsTo *stops* the unit when wwan0 goes away,
+# and a stopped unit is not a restarted one. That case is [Install]'s job.
+Restart=always
+RestartSec=5s
+
+# The default route's metric comes from /etc/iface-metrics via dhclient-script,
+# not from here and not from an exit hook. /etc/dhclient-exit-hooks used to
+# delete and re-add the route to force metric 700, because dhclient-script
+# hardcoded 50 and ignored IF_METRIC; both of those are gone.
+
+[Install]
+# WantedBy the device unit, not udev's ENV{SYSTEMD_WANTS}, and this is the whole
+# reason wwan0 needed a manual "systemctl start" to come up.
+#
+# The rule was:
+#   SUBSYSTEM=="net", ACTION=="add", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2c7c", \
+#     TAG+="systemd", ENV{SYSTEMD_WANTS}+="quectel-ecm-up.service"
+#
+# It matches - "udevadm test /sys/class/net/wwan0" prints the property - but the
+# property was never in the device's udev database at boot:
+#
+#   # grep SYSTEMD /run/udev/data/n3
+#   E:SYSTEMD_ALIAS=/sys/subsystem/net/devices/wwan0        <- no SYSTEMD_WANTS
+#
+# because 79-quectel-ecm-name.rules renames the interface. The kernel emits a
+# second uevent for the rename - ACTION=move, "cdc_ether 1-1:1.0 wwan0: renamed
+# from usb0" in dmesg - udev processes it, the rule's ACTION=="add" does not match,
+# and the database entry is rewritten without SYSTEMD_WANTS. Replaying the add by
+# hand ("udevadm trigger --action=add /sys/class/net/wwan0") starts the service and
+# brings the uplink up, which is what pinned it down.
+#
+# ACTION=="add|move" would paper over that, but it would still be edge-triggered
+# through a property that has to survive whatever else touches the device. A
+# .wants link on the device unit is the level-triggered form: systemd starts this
+# unit every time sys-subsystem-net-devices-wwan0.device activates, which is
+# exactly the condition we mean, and it is what makes a modem reset recover on its
+# own - the reset disconnects the USB device, BindsTo stops us, the device comes
+# back a few seconds later and pulls us in again.
+#
+# preset-all enables this (default policy is enable), and the link lands in
+# sys-subsystem-net-devices-wwan0.device.wants/, not multi-user.target.wants/, so
+# it is inert on a board with no modem and needs no Condition*= of its own.
+# QUECTEL_ECM=OFF deletes the unit file itself, so there is nothing to enable.
+WantedBy=sys-subsystem-net-devices-wwan0.device

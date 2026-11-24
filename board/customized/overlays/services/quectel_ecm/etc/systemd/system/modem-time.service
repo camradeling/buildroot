@@ -1,0 +1,27 @@
+[Unit]
+Description=Set the system clock from the Quectel modem (AT+QLTS)
+# Same level-triggered shape as quectel-ecm-up.service: pulled in by the wwan0
+# device unit (see [Install]), so it runs exactly when a working ECM modem is
+# present and is inert on a board without one. No Condition*= of its own is
+# needed - the .wants link lands in the device unit's directory, and
+# QUECTEL_ECM=OFF deletes this unit file altogether.
+After=sys-subsystem-net-devices-wwan0.device
+# Not BindsTo: unlike a DHCP lease, a clock that has been set stays correct after
+# the modem goes away, and there is nothing to tear down.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modem-time
+# The script polls AT+CCLK? for up to CCLK_TRIES*CCLK_INTERVAL = 120s, waiting
+# for the modem to see NITZ; the default 90s start timeout would cut that short.
+TimeoutStartSec=180
+
+# Nothing is ordered after this unit on purpose. xray.service wants a correct
+# clock - REALITY embeds a client timestamp - but it does not need one to start:
+# it fails handshakes until the clock jumps and then simply works, so ordering
+# the two would only mean no proxy at all on a board whose modem is slow to
+# register.
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wwan0.device

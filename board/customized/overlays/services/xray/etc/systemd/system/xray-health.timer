@@ -1,0 +1,22 @@
+[Unit]
+Description=Probe the Xray tunnel every minute
+Documentation=file:/usr/sbin/xray-health
+# The switch again - see xray-health.service. It has to be on the timer too: this
+# is the unit preset-all enables, and without a condition an XRAY_CLIENT=OFF board
+# would wake up every minute to run a script that exits immediately.
+ConditionPathExists=/etc/xray/config.json
+
+[Timer]
+# Late enough that xray, the modem's DHCP lease and the clock from AT+QLTS have all
+# had a chance: a probe that runs before the uplink exists is a wasted tick, and one
+# that runs before the clock jumps would fail a REALITY handshake for a reason that
+# has nothing to do with the tunnel. The default route check in the script covers
+# the rest.
+OnBootSec=3min
+OnUnitActiveSec=60s
+# Without this systemd is free to smear the timer by a minute to batch wakeups,
+# which turns "three failures, about three minutes" into anything up to six.
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=DHCP client for wlan1
+Wants=network.target
+After=wpa_supplicant_wlan1.service
+# Same gate as wpa_supplicant_wlan1.service: no client config, no DHCP on wlan1.
+ConditionPathExists=/etc/wpa_supplicant_wlan1.conf
+
+[Service]
+Type=simple
+ExecStart=/sbin/dhclient wlan1 -d
+# No ExecStartPost=wlan1-fix-metric.sh any more. That script slept 3s, hoped
+# dhclient had installed its route by then, deleted it and re-added it with
+# metric 200 - a race it lost whenever the lease took longer, and 3s of delay on
+# every boot when it won. dhclient-script now installs the right metric from
+# /etc/iface-metrics the first time, so there is nothing to fix up afterwards.
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

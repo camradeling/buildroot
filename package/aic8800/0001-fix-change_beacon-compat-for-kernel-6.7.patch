@@ -1,0 +1,28 @@
+From: buildroot <buildroot@buildroot.org>
+Subject: [PATCH] fix change_beacon compat for kernel 6.7
+
+cfg80211_ap_update was introduced in kernel 6.7.0, not 6.7.1.
+Fix the version check to use >= instead of >.
+
+Signed-off-by: buildroot <buildroot@buildroot.org>
+---
+--- a/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c
++++ b/src/USB/driver_fw/drivers/aic8800/aic8800_fdrv/rwnx_main.c
+@@ -4191,7 +4191,7 @@
+  * @change_beacon: Change the beacon parameters for an access point mode
+  *	interface. This should reject the call when AP mode wasn't started.
+  */
+-#if LINUX_VERSION_CODE > KERNEL_VERSION(6, 7, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
+ static int rwnx_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+                                        struct cfg80211_ap_update *info)
+ #else
+@@ -4211,7 +4211,7 @@
+ 	elem.dma_addr = 0;
+
+     // Build the beacon
+-#if LINUX_VERSION_CODE > KERNEL_VERSION(6, 7, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
+     buf = rwnx_build_bcn(bcn, &info->beacon);
+ #else
+     buf = rwnx_build_bcn(bcn, info);

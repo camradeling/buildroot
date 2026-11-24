@@ -1,0 +1,18 @@
+[Unit]
+Description=Uplink-agnostic NAT for the LAN interfaces
+Documentation=file:/usr/sbin/netpolicy
+# Nothing here waits for an interface: iptables matches -s and -o by name at
+# packet time, so the rules can be installed before any uplink exists. Ordered
+# with network-pre.target, the slot systemd reserves for firewall rules, so the
+# policy is in place before anything can be forwarded.
+Wants=network-pre.target
+After=network-pre.target
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/netpolicy
+
+[Install]
+WantedBy=multi-user.target

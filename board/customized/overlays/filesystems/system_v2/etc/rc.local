@@ -1,0 +1,53 @@
+#!/bin/bash
+
+source /etc/system.vars
+
+SCRIPT_DIR=/etc/scripts
+
+chown -R www-data:www-data /var/www
+chown root:admin /sbin/reboot
+chown root:admin /usr/bin/systemctl
+chown -R root:admin /var/log
+chmod -R 775 /var/log
+chown root:admin /etc/network/interfaces
+chmod 775 /etc/network/interfaces
+chown root:admin /etc/resolv.conf
+chmod 775 /etc/resolv.conf
+chown root:admin /media/data/custometc
+
+modprobe cfg80211
+
+mkdir -p /run/openvpn
+mkdir -p /var/lib/misc/
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+mkdir -p /var/lib/dhcp/
+
+if [ ! -d /media/boot ]; then
+        mkdir /media/boot
+fi
+
+BOOTPART=$(lsblk -o NAME,LABEL | grep boot$ | awk '{print $1}')
+BOOTPART=/dev/${BOOTPART:2:$((${#BOOTPART}-2))}
+mount ${BOOTPART} /media/boot
+BACKUP_TAG=$(cat /media/boot/slot1/version.txt)
+echo "export BACKUP_TAG=$BACKUP_TAG" > /etc/profile.d/backup_tag.sh
+
+if ! mountpoint -q /media/boot; then
+    echo "ERROR: failed to mount boot partition, skipping recovery check" >&2
+elif [ -f /etc/recovery_partitions_check.sh ]; then
+    /etc/recovery_partitions_check.sh
+fi
+
+for entry in ${SCRIPT_DIR}/*.sh
+do
+        echo "INFO: run script: '${entry}'"
+        ${entry}
+done
+
+if [[ $NEEDREBOOT == "ON" ]]; then
+        echo "INFO: reboot"
+        reboot
+fi
+
+exit 0

@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 064aa06..ae4d7b3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -18,6 +17,7 @@ project(stlink C)
+ set(PROJECT_DESCRIPTION "Open source version of the STMicroelectronics ST-LINK Tools")
+ include(GNUInstallDirs) # Define GNU standard installation directories
+ 
++set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
+ ## Determine project version
+ include(${CMAKE_MODULE_PATH}/get_version.cmake)
+ 

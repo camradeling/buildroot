@@ -1,0 +1,18 @@
+config BR2_PACKAGE_USBIP
+    bool "usbip"
+    select BR2_PACKAGE_LIBGLIB2
+    select BR2_PACKAGE_LIBSYSFS
+    depends on BR2_TOOLCHAIN_HAS_THREADS  # Требует поддержки потоков
+    depends on BR2_LINUX_KERNEL  # Требует сборки ядра
+    #depends on BR2_LINUX_KERNEL_VERSION_GTE_3_17  # Минимальная версия ядра
+    help
+      Tools for sharing USB devices over IP network.
+      Requires Linux kernel >= 3.17 with USB/IP support enabled.
+
+      Kernel config requirements:
+      - CONFIG_USBIP_CORE
+      - CONFIG_USBIP_HOST (for server)
+      - CONFIG_USBIP_VHCI_HCD (for client)
+
+comment "USB/IP requires Linux kernel >= 3.17 (current: $(BR2_LINUX_KERNEL_VERSION))"
+    depends on BR2_LINUX_KERNEL_VERSION_LT_3_17

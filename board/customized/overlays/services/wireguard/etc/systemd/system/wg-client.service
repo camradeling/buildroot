@@ -1,0 +1,27 @@
+[Unit]
+Description=WireGuard client interface wg0
+Documentation=file:/usr/sbin/wgpolicy
+# The config file is the switch, as for xray.service: preset-all enables every
+# unit with an [Install] section after the createfs scripts have run, so
+# WG_CLIENT=OFF works by 0014-wireguard_client_service.sh deleting this file.
+# See CLAUDE.md, "Optional services".
+ConditionPathExists=/etc/wireguard/wg0.conf
+# netpolicy's MASQUERADE rules are what NAT the LAN out of wg0. Nothing here
+# waits for an uplink: the endpoint is an IP literal (0014 insists on it) and
+# WireGuard simply retries its handshake until the modem has a lease.
+After=network-pre.target netpolicy.service
+Wants=netpolicy.service
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/wgpolicy up
+ExecStop=/usr/sbin/wgpolicy down
+# wg-health leaves a failed unit alone (it only watches an active one), so a
+# failed "up" has to be retried here or it stays down until the next boot.
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

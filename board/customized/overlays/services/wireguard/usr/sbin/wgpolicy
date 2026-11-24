@@ -1,0 +1,209 @@
+#!/bin/sh
+# The WireGuard client interface and, with WG_LAN_ROUTE=ON, the LAN's way out
+# through it.
+#
+# Why this exists next to Xray: on testbot4's carrier the failure mode is TCP
+# itself - forged idle RSTs and upstream TCP loss while UDP and ICMP to the same
+# server pass (workplans/003). A UDP tunnel is the one uplink that does not ride
+# the thing being impaired.
+#
+# The interface is built by hand - ip link + wg setconf + ip addr - rather than by
+# wg-quick, because wg-quick owns routing too (Table=, fwmark rules, its own DNS
+# via resolvconf), and on this board routing already has owners: netpolicy for
+# NAT, xraypolicy for TPROXY. 0014-wireguard_client_service.sh strips the config
+# down to what wg(8) itself accepts and puts the rest in system.vars.
+#
+# Routing is policy routing keyed on the LAN interface, the same shape as
+# xraypolicy and for the same reason: the box's own traffic is untouched, so
+# WireGuard's UDP to the endpoint, dhclient on wwan0 and SSH on usb0 can never be
+# routed into the tunnel they carry.
+#
+#   pref 5200  iif <lan>  lookup main suppress_prefixlength 0
+#   pref 5210  from <tunnel address>  lookup 200
+#   pref 5220  iif <lan>  lookup 200              (default dev wg0)
+#   pref 5230  to <WG_DNS>  lookup 200
+#
+# 5200 lets the main table answer everything except its default route: the LAN's
+# own subnets, the modem's 192.168.43.0/24, anything connected. Only what would
+# have left by the default route goes on to 5220 and into the tunnel. 5210 makes
+# anything sourced from the tunnel address - wg-health's probe - use the tunnel.
+# 5230 is the LAN's DNS: dnsmasq's upstream queries are locally generated, so
+# without it they would go out by wwan0, where the carrier forges DNS answers.
+#
+# Fail-open by construction: with wg0 gone, table 200 is empty, a lookup in it
+# finds nothing, and the kernel falls through to the main table. wg-health is
+# what takes the rules out while wg0 exists but carries nothing.
+#
+# Called by wg-client.service:
+#   ExecStart=/usr/sbin/wgpolicy up
+#   ExecStop=/usr/sbin/wgpolicy down
+# and by wg-health, which calls lan-add/lan-del to follow the tunnel's state.
+#
+# Usage: wgpolicy up|down|lan-add|lan-del
+
+set -u
+
+. /etc/system.vars
+
+IFACE=wg0
+CONF=/etc/wireguard/${IFACE}.conf
+TABLE=200
+ADDRESS=${WG_ADDRESS:-}
+MTU=${WG_MTU:-1420}
+DNS=${WG_DNS:-1.1.1.1}
+LAN_ROUTE=${WG_LAN_ROUTE:-OFF}
+IFACES=${WG_LAN_IFACES:-usb0 wlan0}
+
+log()
+{
+	logger -t wgpolicy "$*"
+}
+
+## Same trap as in xraypolicy: busybox's ip has no "rule" command and silently
+## ignores "table N" on a route add, which installs the tunnel as the *main*
+## default route - including for WireGuard's own UDP, which then loops into itself.
+require_iproute2()
+{
+	if ip -V 2>/dev/null | grep -q iproute2; then
+		return 0
+	fi
+	log "ERROR: ip is not iproute2 (busybox applet?), refusing to touch policy routing"
+	return 1
+}
+
+## Several rules share a preference (one per LAN interface), so delete by
+## preference until none is left rather than by exact match.
+rules_del()
+{
+	for _p in "$@"; do
+		while ip rule del pref ${_p} 2>/dev/null; do :; done
+	done
+}
+
+## See xraypolicy's flush_conntrack for why this is wrapped the way it is.
+## Here it is what moves established LAN flows: their conntrack entries carry
+## the MASQUERADE source of the path they started on.
+flush_conntrack()
+{
+	if sh -c 'conntrack -F; exit $?' > /dev/null 2>&1; then
+		return 0
+	fi
+	log "WARNING: conntrack -F failed, so existing flows keep their old path until they end"
+}
+
+## Drop the answers dnsmasq cached from the other path.
+dnsmasq_hup()
+{
+	_pids=$(pidof dnsmasq 2>/dev/null)
+	if [ -n "${_pids}" ]; then
+		kill -HUP ${_pids} 2>/dev/null
+	fi
+}
+
+## The tunnel MTU is below the uplink's, and PMTU discovery across a carrier
+## that eats ICMP is not something to rely on - clamp the MSS of forwarded TCP
+## instead.
+mss_add()
+{
+	iptables -t mangle -C FORWARD -o ${IFACE} -p tcp --tcp-flags SYN,RST SYN \
+		-j TCPMSS --clamp-mss-to-pmtu 2>/dev/null && return 0
+	iptables -t mangle -A FORWARD -o ${IFACE} -p tcp --tcp-flags SYN,RST SYN \
+		-j TCPMSS --clamp-mss-to-pmtu \
+		|| log "WARNING: no TCPMSS target (CONFIG_NETFILTER_XT_TARGET_TCPMSS?), large TCP segments may black-hole"
+}
+
+mss_del()
+{
+	while iptables -t mangle -D FORWARD -o ${IFACE} -p tcp --tcp-flags SYN,RST SYN \
+		-j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done
+}
+
+lan_add()
+{
+	[ "${LAN_ROUTE}" = "ON" ] || return 0
+	rules_del 5200 5220 5230
+	for _i in ${IFACES}; do
+		ip rule add pref 5200 iif "${_i}" lookup main suppress_prefixlength 0 || return 1
+		ip rule add pref 5220 iif "${_i}" lookup ${TABLE} || return 1
+	done
+	ip rule add pref 5230 to "${DNS}" lookup ${TABLE} || return 1
+	flush_conntrack
+	dnsmasq_hup
+	log "LAN (${IFACES}) and DNS ${DNS} routed through ${IFACE}"
+}
+
+lan_del()
+{
+	rules_del 5200 5220 5230
+	flush_conntrack
+	dnsmasq_hup
+	log "LAN routing through ${IFACE} removed, the LAN uses the main table"
+}
+
+up()
+{
+	require_iproute2 || return 1
+	[ -n "${ADDRESS}" ] || { log "ERROR: WG_ADDRESS is empty in /etc/system.vars"; return 1; }
+
+	## Built as a module (it has to be: IPV6=m, and WIREGUARD depends on
+	## "IPV6 || !IPV6"). ip link would autoload it through the rtnl-link alias,
+	## but a missing module is a clearer error here than "Unknown device type".
+	modprobe wireguard 2>/dev/null
+
+	## A leftover from a killed instance would make "ip link add" fail.
+	ip link del ${IFACE} 2>/dev/null
+	ip link add ${IFACE} type wireguard || { log "ERROR: cannot create ${IFACE} (wireguard.ko missing?)"; return 1; }
+	if ! wg setconf ${IFACE} ${CONF}; then
+		log "ERROR: wg setconf ${CONF} failed"
+		ip link del ${IFACE}
+		return 1
+	fi
+	ip addr add "${ADDRESS}" dev ${IFACE} || return 1
+	ip link set ${IFACE} mtu ${MTU} up || return 1
+
+	## Replies from the internet arrive on wg0 with sources the main table routes
+	## out of wwan0; strict rp_filter would drop every one of them.
+	echo 2 > /proc/sys/net/ipv4/conf/${IFACE}/rp_filter
+
+	ip route replace default dev ${IFACE} table ${TABLE} || return 1
+	rules_del 5210
+	ip rule add pref 5210 from "${ADDRESS%/*}" lookup ${TABLE} || return 1
+	mss_add
+	log "${IFACE} up, ${ADDRESS} mtu ${MTU}"
+
+	lan_add
+}
+
+down()
+{
+	lan_del
+	rules_del 5210
+	mss_del
+	ip route flush table ${TABLE} 2>/dev/null
+	ip link del ${IFACE} 2>/dev/null
+	log "${IFACE} down"
+}
+
+case "${1:-}" in
+up)
+	## ExecStart failing leaves the unit failed and ExecStop does not run, so
+	## clean up here or a half-built interface stays behind.
+	up || { down; exit 1; }
+	;;
+down)
+	down
+	;;
+lan-add)
+	require_iproute2 || exit 1
+	lan_add || exit 1
+	;;
+lan-del)
+	lan_del
+	;;
+*)
+	echo "usage: $(basename "$0") up|down|lan-add|lan-del" >&2
+	exit 1
+	;;
+esac
+
+exit 0

@@ -1,0 +1,19 @@
+config BR2_PACKAGE_XRAY
+	bool "xray"
+	depends on BR2_aarch64
+	help
+	  Xray-core, a network proxy platform speaking VLESS/REALITY,
+	  VMess, Trojan, Shadowsocks and SOCKS, with a transparent
+	  proxy (TPROXY) inbound.
+
+	  This installs the official prebuilt, statically linked aarch64
+	  binary from the upstream release, not a from-source build:
+	  current xray-core needs a much newer Go toolchain than
+	  Buildroot's host-go provides. Only the xray binary is
+	  installed - the geoip.dat/geosite.dat databases in the release
+	  archive are 30MB of routing data we do not use.
+
+	  https://github.com/XTLS/Xray-core
+
+comment "xray needs an aarch64 target"
+	depends on !BR2_aarch64

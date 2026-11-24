@@ -1,0 +1,60 @@
+#!/bin/bash
+# TEMPLATE - the build never reads this file. Copy it once per checkout and fill
+# it in; the copy is the build input and is gitignored, so local paths and
+# secrets never reach git:
+#   cp board/customized/orangepi/orangepi3.vars.template board/customized/orangepi/orangepi3.vars
+# Paths below are placeholders; a feature switched ON fails the build until its
+# path points at a real file. Empty PSKs fail the build the same way.
+################3 username #############################################
+export USERDIR=/home/${USER}
+################# system variables file ################################
+export SYSTEM_VARS_FILE=/etc/system.vars
+export BOARD_VERSION=orangepi_zero3
+################# device hostname ######################################
+export DEV_HOSTNAME="orange"
+################# ssh keys #############################################
+export SSH_KEY_FILES_LIST="/path/to/your_key.pub"
+################# vpn config file ######################################
+export VPN_CLIENT=ON
+export VPN_CONFIG=/path/to/openvpn-client.conf
+################# network configuration ################################
+export DEVICE_IFACE="eth0"
+export DEVICE_STATIC_ADDR="ON"
+export DEVICE_STATIC_IPADDR="192.168.7.100"
+export DEVICE_STATIC_NETMASK="255.255.255.0"
+export DEVICE_STATIC_GATEWAY="192.168.7.11"
+export DEVICE_DHCP_ADDR=ON
+export DEVICE_DNS_SERVER=8.8.8.8
+################# gpio pins variables ##################################
+export VPN_LED=OFF
+export VPN_LED_PIN=
+export VPN_LED_PIN_INVERT=false
+export GREEN_LED_PIN=23
+export GREEN_LED_PIN_INVERT=false
+export SMART_GREEN_LED_PIN=
+export SMART_GREEN_LED_PIN_INVERT=false
+export RED_LED_PIN=24
+export RED_LED_PIN_INVERT=false
+################ usb gadget device #####################################
+export USB_GADGET_DEVICE=ON
+export USB_RNDIS=ON
+export USB_MASS_STORAGE=OFF
+################ wifi client ###########################################
+export WIFI_CLIENT=OFF
+export WIFI_CLIENT_WLAN_NAME=wlan1
+export WLAN_SSID=testnet
+export WLAN_PSK=
+################ wifi access point #####################################
+export WIFI_AP=ON
+export WIFI_AP_WLAN_NAME=wlan0
+export WIFI_AP_ADDR=192.168.3.1
+export WIFI_AP_NETMASK=255.255.255.0
+export WIFI_AP_SSID=maloc
+export WIFI_AP_PSK=
+export WIFI_AP_BSS_TRANSITION=ON
+
+################# build secrets (never commit real values) #############
+## Root password baked into images whose defconfig uses "$(BR_ROOT_PASSWD)".
+export BR_ROOT_PASSWD=""
+## Git URL of the private sstar-flash tool (only if BR2_PACKAGE_SSTAR_FLASH=y).
+export SSTAR_FLASH_REPO_URL=""

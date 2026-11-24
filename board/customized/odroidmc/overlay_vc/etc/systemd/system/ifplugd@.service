@@ -1,0 +1,8 @@
+[Unit]
+Description=Provides automatic dhcp resolution for bonded failover connection
+
+[Service]
+ExecStart=/sbin/ifplugd -i %i -r /etc/ifplugd/ifplugd.action -fIns
+
+[Install]
+WantedBy=multi-user.target

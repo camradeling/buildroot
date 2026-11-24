@@ -1,0 +1,17 @@
+[Unit]
+Description=dnsmasq
+Wants=network.target
+After=sys-subsystem-net-devices-usb0.device network.target sshd.service rc-local.service
+# preset-all enables this unconditionally, so the real switch is the config file
+# (removed by 0007-startusb_service.sh when the USB network gadget is off).
+ConditionPathExists=/etc/dnsmasq_usb0.conf
+
+[Service]
+Type=simple
+ExecStart=/sbin/dnsmasq -d -C /etc/dnsmasq_usb0.conf
+ExecStop=/bin/kill -INT $MAINPID
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

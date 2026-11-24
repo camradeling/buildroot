@@ -1,0 +1,9 @@
+SUBSYSTEM=="usb", KERNELS=="2-1.1.1", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"
+SUBSYSTEM=="usb", KERNELS=="2-1.1.2", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"
+SUBSYSTEM=="usb", KERNELS=="2-1.1.3", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"
+
+# USB1 and usb2 names are yet inconsistent and can swap
+#until this is fixed we need to keep both paths as a workaround
+SUBSYSTEM=="usb", KERNELS=="1-1.1.1", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"
+SUBSYSTEM=="usb", KERNELS=="1-1.1.2", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"
+SUBSYSTEM=="usb", KERNELS=="1-1.1.3", ACTION=="add", RUN+="/usr/bin/usbip bind -b %k"

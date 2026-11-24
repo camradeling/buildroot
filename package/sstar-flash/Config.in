@@ -1,0 +1,20 @@
+config BR2_PACKAGE_SSTAR_FLASH
+	bool "sstar-flash"
+	help
+	  Linux tool for flashing SigmaStar SoCs over USB.
+	  Uses SCSI Generic (SG_IO) to send vendor commands to the
+	  SoC's ROM bootloader / U-Boot over USB Mass Storage.
+
+	  The source repository is private: set SSTAR_FLASH_REPO_URL
+	  (e.g. in the board .vars file) to its git URL.
+
+if BR2_PACKAGE_SSTAR_FLASH
+
+config BR2_PACKAGE_SSTAR_FLASH_UDEV_RULES
+	bool "Install udev rules"
+	default y
+	help
+	  Install udev rules granting unprivileged access to
+	  SigmaStar USB boot devices (VID:PID 1b20:0300, 1a40:0201).
+
+endif

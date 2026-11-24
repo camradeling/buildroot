@@ -1,0 +1,4 @@
+# From https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip.dgst
+sha256  4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c  Xray-linux-arm64-v8a.zip
+# Locally computed
+sha256  1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5  LICENSE

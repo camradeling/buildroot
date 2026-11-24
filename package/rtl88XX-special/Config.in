@@ -1,0 +1,8 @@
+config BR2_PACKAGE_RTL88XX_SPECIAL
+	bool "rtl8812/14 aircrack"
+	depends on BR2_LINUX_KERNEL
+	help
+	  rtl8812au wifi driver
+
+comment "rtl8812/14 needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL

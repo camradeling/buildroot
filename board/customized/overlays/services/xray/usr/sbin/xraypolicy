@@ -1,0 +1,459 @@
+#!/bin/sh
+# TPROXY policy for the Xray uplink: everything forwarded from a LAN interface is
+# handed to the local Xray client, the box's own traffic is not.
+#
+#   -t mangle -A PREROUTING -i <lan iface> -j XRAY
+#
+# PREROUTING only, never OUTPUT. That is the whole safety argument of this shape:
+# locally generated packets - an SSH reply on usb0, dhclient on wwan0, Xray's own
+# connection to the server - never enter PREROUTING, so they cannot be marked,
+# cannot be sent to table 100, and cannot be proxied by the proxy they belong to.
+# There is no owner/cgroup match to get wrong and no way to lock the box out of
+# its own management interface.
+#
+# Keyed on the LAN interface name for the same reason netpolicy is keyed on the
+# LAN subnet: iptables evaluates -i at packet time, so the rules can be installed
+# before any interface exists, they are inert while the AP or the USB gadget is
+# down, and restarting hostapd or re-plugging the gadget cannot disturb them. No
+# uplink appears anywhere in the set - there is no list to keep in sync.
+#
+# It also owns the LAN's DNS upstream, for the same fail-open reason: the mangle
+# rules and the resolvers have to move together or "fail open" means a LAN that
+# routes directly and resolves nothing. See dns_set below. And the box's own DNS,
+# through the singtun0 TUN inbound - see board_dns_add - and with
+# XRAY_BOARD_TUNNEL=ON the box's own traffic too, see board_tunnel_add.
+#
+# Called by xray.service:
+#   ExecStartPost=/usr/sbin/xraypolicy add
+#   ExecStopPost=/usr/sbin/xraypolicy del     (runs on every exit path)
+# by netpolicy at boot:
+#   /usr/sbin/xraypolicy boot                 (kill switch + the down-state DNS)
+# and by xray-health, which calls add/del to follow the tunnel's actual state.
+#
+# Usage: xraypolicy add|del|boot
+
+set -u
+
+. /etc/system.vars
+
+CHAIN=XRAY
+KILL_CHAIN=XRAYKILL
+TABLE=100
+MARK=0x1
+PORT=${XRAY_TPROXY_PORT:-12345}
+IFACES=${XRAY_LAN_IFACES:-usb0 wlan0}
+KILLSWITCH=${XRAY_KILLSWITCH:-OFF}
+DNS_ADDR=${XRAY_DNS_ADDR:-127.0.0.2}
+DNS_UPSTREAM=${XRAY_DNS_UPSTREAM:-1.1.1.1}
+## dnsmasq reads this through resolv-file=, appended to every LAN dnsmasq conf by
+## createfs-scripts/0013-xray_client_service.sh - keep the path in step with it.
+RESOLV_FILE=/run/xray-dns.conf
+
+IPT="iptables -t mangle"
+
+log()
+{
+	logger -t xraypolicy "$*"
+}
+
+## Policy routing is the one part of this that busybox cannot do. Its ip applet
+## has no "rule" command and - the reason this check exists at all - it silently
+## ignores "table 100" on a route add, so "ip route add local default dev lo
+## table 100" installs a black-hole default route in the *main* table instead.
+## That was measured on this board: it took the box off the network until the
+## route was deleted by hand. iproute2 is in the defconfig; refuse to run without
+## it rather than break routing.
+require_iproute2()
+{
+	if ip -V 2>/dev/null | grep -q iproute2; then
+		return 0
+	fi
+	log "ERROR: ip is not iproute2 (busybox applet?), refusing to touch policy routing"
+	return 1
+}
+
+#####################################################################
+## the mangle rule set
+#####################################################################
+build_chain()
+{
+	## -N once, then -F: re-running add must not append a second copy of
+	## everything, and flushing is simpler than testing nine rules
+	${IPT} -N ${CHAIN} 2>/dev/null
+	${IPT} -F ${CHAIN}
+
+	## The box itself. --dst-type LOCAL covers every address on every interface,
+	## including the ones that appear later, which is what keeps the SSH session
+	## on usb0 alive.
+	${IPT} -A ${CHAIN} -m addrtype --dst-type LOCAL -j RETURN
+	${IPT} -A ${CHAIN} -d 127.0.0.0/8 -j RETURN
+	## LAN-to-LAN traffic, and the modem's own 192.168.43.0/24. A LAN client
+	## therefore cannot reach an RFC1918 address *behind* the server either - if
+	## the server ever becomes a site-to-site peer rather than an exit node, those
+	## subnets need an explicit jump ahead of these RETURNs.
+	${IPT} -A ${CHAIN} -d 10.0.0.0/8 -j RETURN
+	${IPT} -A ${CHAIN} -d 172.16.0.0/12 -j RETURN
+	${IPT} -A ${CHAIN} -d 192.168.0.0/16 -j RETURN
+	${IPT} -A ${CHAIN} -d 224.0.0.0/4 -j RETURN
+	${IPT} -A ${CHAIN} -d 255.255.255.255/32 -j RETURN
+
+	## Everything else goes to the dokodemo-door inbound. TPROXY sets the fwmark
+	## itself, which is what the ip rule below matches on.
+	${IPT} -A ${CHAIN} -p tcp -j TPROXY --on-port ${PORT} --tproxy-mark ${MARK}
+	${IPT} -A ${CHAIN} -p udp -j TPROXY --on-port ${PORT} --tproxy-mark ${MARK}
+}
+
+hook_chain()
+{
+	for _i in ${IFACES}; do
+		if ${IPT} -C PREROUTING -i "${_i}" -j ${CHAIN} 2>/dev/null; then
+			continue
+		fi
+		${IPT} -A PREROUTING -i "${_i}" -j ${CHAIN}
+	done
+}
+
+unhook_chain()
+{
+	for _i in ${IFACES}; do
+		while ${IPT} -C PREROUTING -i "${_i}" -j ${CHAIN} 2>/dev/null; do
+			${IPT} -D PREROUTING -i "${_i}" -j ${CHAIN} || break
+		done
+	done
+	${IPT} -F ${CHAIN} 2>/dev/null
+	${IPT} -X ${CHAIN} 2>/dev/null
+}
+
+#####################################################################
+## policy routing: marked packets are delivered locally
+#####################################################################
+route_add()
+{
+	if ! ip rule show | grep -q "fwmark ${MARK} lookup ${TABLE}"; then
+		ip rule add fwmark ${MARK} lookup ${TABLE} || return 1
+	fi
+	## "local" is what makes the kernel accept a packet addressed to someone else
+	## on lo, which is how a TPROXY'd packet reaches the listening socket.
+	## replace, not add, so a leftover route is corrected instead of duplicated.
+	ip route replace local default dev lo table ${TABLE}
+}
+
+route_del()
+{
+	while ip rule show | grep -q "fwmark ${MARK} lookup ${TABLE}"; do
+		ip rule del fwmark ${MARK} lookup ${TABLE} 2>/dev/null || break
+	done
+	ip route flush table ${TABLE} 2>/dev/null
+}
+
+#####################################################################
+## conntrack
+#####################################################################
+## Dropping the established flows is what makes LAN clients repath the moment the
+## tunnel appears or disappears, instead of whenever their connections happen to
+## end.
+##
+## Wrapped, because conntrack-tools 1.4.7 does not fail gracefully when the kernel
+## has no NETLINK_NETFILTER: it prints "mnl_socket_open: Protocol not supported"
+## and then segfaults. That is fixed in the kernel config (CONFIG_NF_CT_NETLINK),
+## and this is what keeps a kernel rebuilt without it from dumping a core on every
+## xray restart - it happened, four cores per restart cycle.
+##
+## The "; exit $?" is load-bearing: given a single command the shell execs it
+## rather than forking, and the "Segmentation fault (core dumped)" notice for a
+## crashing child is printed by the *parent* shell, whose stderr is not the one
+## redirected here. With two commands the inner shell forks, so its notice goes to
+## /dev/null with everything else.
+flush_conntrack()
+{
+	if sh -c 'conntrack -F; exit $?' > /dev/null 2>&1; then
+		return 0
+	fi
+	log "WARNING: conntrack -F failed, so existing flows keep their old path until they end"
+}
+
+#####################################################################
+## the LAN's DNS upstream
+#####################################################################
+## The LAN resolvers do not talk to the internet - they forward to whatever this
+## file says, because a dnsmasq query is locally generated traffic and PREROUTING
+## never sees it, so a direct upstream would leak every lookup around the tunnel.
+##
+## Indirection through a file, and not a "server=" line in dnsmasq.conf, because
+## the upstream has to follow the routing. dnsmasq re-reads a resolv-file at
+## runtime - it polls it, and flushes its cache on SIGHUP - but never re-reads its
+## config file, so a hard-wired upstream cannot be moved without restarting
+## dnsmasq, and the LAN would end up routing directly (fail-open) while resolving
+## through an inbound that is not there. That is a blackhole with extra steps.
+##
+## Port 53 on an address of its own for the same reason: "nameserver" lines carry
+## no port.
+dns_set()
+{
+	_ns=${1}
+	_tmp=${RESOLV_FILE}.new
+
+	if [ -n "${_ns}" ]; then
+		printf '# Generated by xraypolicy, read by dnsmasq (resolv-file=).\nnameserver %s\n' \
+			"${_ns}" > "${_tmp}"
+	else
+		## No upstream at all: with the kill switch on, a LAN that cannot leave
+		## the box must not be able to resolve either.
+		printf '# Generated by xraypolicy: no upstream, the kill switch is closed.\n' > "${_tmp}"
+	fi
+	if [ ! -f "${_tmp}" ]; then
+		log "ERROR: cannot write ${_tmp}, the LAN keeps its previous DNS upstream"
+		return 1
+	fi
+	mv -f "${_tmp}" "${RESOLV_FILE}" || return 1
+
+	## SIGHUP is what makes it immediate and drops the answers cached from the
+	## other path; without it dnsmasq would still pick the file up on its next
+	## poll, with a cache that may still point through a tunnel that is gone.
+	_pids=$(pidof dnsmasq 2>/dev/null)
+	if [ -n "${_pids}" ]; then
+		kill -HUP ${_pids} 2>/dev/null
+	fi
+	log "LAN DNS upstream: ${_ns:-none (kill switch closed)}"
+}
+
+#####################################################################
+## the box's own DNS: systemd-resolved through singtun0
+#####################################################################
+## Everything above is for the LAN; the box's own lookups go to systemd-resolved,
+## whose upstream is plain UDP over wwan0, where the carrier forges answers. So
+## config.json also has a TUN inbound, singtun0 - the same interface and the same
+## addresses as the sing-box client on the laptop - and resolved is told to use
+## the far end of it as its only DNS server ("~." makes the link exclusive). What
+## arrives there on port 53 is redirected to ${DNS_UPSTREAM} through the tunnel;
+## anything else is dropped - unless XRAY_BOARD_TUNNEL=ON routes the box's own
+## traffic into it, see board_tunnel_add.
+##
+## The same add/del as the LAN, and for the same reason: while the tunnel is dead
+## the box resolves directly instead of not at all.
+##
+## The addresses are repeated in createfs-scripts/0013-xray_client_service.sh -
+## keep the two in step. xray creates the interface but on Linux does not
+## configure the gateway address itself, hence the ip addr here.
+TUN_IFACE=singtun0
+TUN_ADDR=172.19.0.1/30
+TUN_DNS=172.19.0.2
+
+board_dns_add()
+{
+	## Type=simple: ExecStartPost runs as soon as xray is forked, and the TUN
+	## appears a moment later.
+	_n=0
+	while ! ip link show ${TUN_IFACE} > /dev/null 2>&1; do
+		_n=$((_n + 1))
+		if [ ${_n} -gt 50 ]; then
+			log "WARNING: no ${TUN_IFACE} (config.json without the tun inbound?), the box keeps resolving directly"
+			return 0
+		fi
+		sleep 0.1
+	done
+	ip addr replace ${TUN_ADDR} dev ${TUN_IFACE} || return 1
+	resolvectl dns ${TUN_IFACE} ${TUN_DNS} || return 1
+	resolvectl domain ${TUN_IFACE} '~.'
+	resolvectl default-route ${TUN_IFACE} yes
+	resolvectl llmnr ${TUN_IFACE} no
+	resolvectl mdns ${TUN_IFACE} no
+	## DNSSEC and DoT per exit (XRAY_BOARD_DNSSEC/XRAY_BOARD_DOT, see 0013). ON
+	## sets resolved's own defaults explicitly, so the link does not depend on how
+	## systemd was built; the chained hongaserv -> singaserv exit needs them.
+	## OFF is for an exit where they break the box's DNS: through tokyoserv,
+	## resolved's allow-downgrade ended up with the server marked as unable to
+	## serve DNSKEY/DS, although full-size EDNS answers came back on every path
+	## when asked by hand, and from then on failed every name with "DNSSEC
+	## validation failed: missing-key" - box DNS dead, the LAN (dnsmasq via
+	## dns-in) fine. reset-server-features did not clear it; dnssec no did, at
+	## once (2026-10-11).
+	if [ "${XRAY_BOARD_DNSSEC:-ON}" = "OFF" ]; then
+		resolvectl dnssec ${TUN_IFACE} no
+	else
+		resolvectl dnssec ${TUN_IFACE} allow-downgrade
+	fi
+	if [ "${XRAY_BOARD_DOT:-ON}" = "OFF" ]; then
+		resolvectl dnsovertls ${TUN_IFACE} no
+	else
+		resolvectl dnsovertls ${TUN_IFACE} opportunistic
+	fi
+	resolvectl flush-caches
+	log "box DNS: systemd-resolved -> ${TUN_DNS} on ${TUN_IFACE} (exclusive, through the tunnel," \
+		"DNSSEC ${XRAY_BOARD_DNSSEC:-ON}, DoT ${XRAY_BOARD_DOT:-ON})"
+}
+
+board_dns_del()
+{
+	## After xray has exited the interface is gone and resolved has already
+	## dropped its settings; revert is for the health check's del, where xray -
+	## and so the interface - is still there.
+	if ip link show ${TUN_IFACE} > /dev/null 2>&1; then
+		resolvectl revert ${TUN_IFACE} 2>/dev/null
+	fi
+	resolvectl flush-caches 2>/dev/null
+	log "box DNS: systemd-resolved back to its direct upstream"
+}
+
+#####################################################################
+## XRAY_BOARD_TUNNEL=ON: the box's own traffic through singtun0 as well
+#####################################################################
+## The laptop's shape - default route via the TUN - but as policy rules, never
+## as a main-table route, so what is excluded is explicit and nothing that
+## matters can fall into the tunnel by accident:
+##
+##   pref 9000  iif lo  lookup main suppress_prefixlength 0
+##   pref 9010  iif lo  to <XRAY_SERVER>  lookup main
+##   pref 9020  iif lo  to 1.1.1.1 tcp dport 80  lookup main
+##   pref 9030  iif lo  udp dport 123  lookup main
+##   pref 9035  iif lo  icmp  lookup main
+##   pref 9040  iif lo  lookup 2022           (default dev singtun0)
+##
+## "iif lo" is how ip rule says "generated on this box": forwarded LAN traffic
+## never matches, so the TPROXY path above is untouched. 9000 lets the main
+## table answer everything but its default route - the LANs, the modem's
+## 192.168.43.0/24, anything connected - which is why SSH from the LAN keeps
+## working: it is INPUT, and its replies go to a connected subnet. 9010 is the
+## loop guard: xray's own connection to the server must not enter the tunnel
+## it carries. 9020 is xray-health's direct probe, which has to be direct to
+## mean anything. 9030 is NTP: a clock that never syncs breaks REALITY.
+## 9035 is ICMP: VLESS carries only TCP and UDP, so a ping routed into singtun0
+## is dropped by xray and the box could not ping anything at all. Direct, the
+## same as the LAN's ICMP, which TPROXY never touches (tcp/udp rules only) and
+## which leaves through wwan0's MASQUERADE - ping measures the carrier path,
+## not the tunnel; xray-health's probes are what measure the tunnel.
+##
+## dhclient on wwan0 sends from a raw socket, which routing does not apply to.
+##
+## Fail-open: with xray gone singtun0 is gone, the route in 2022 with it, and
+## the lookup falls through to main. del removes the rules anyway, so the
+## health check's fall-open takes the box off the tunnel too.
+BOARD_TABLE=2022
+BOARD_PROBE=1.1.1.1
+
+board_tunnel_del()
+{
+	for _p in 9000 9010 9020 9030 9035 9040; do
+		while ip rule del pref ${_p} 2>/dev/null; do :; done
+	done
+	ip route flush table ${BOARD_TABLE} 2>/dev/null
+}
+
+board_tunnel_add()
+{
+	[ "${XRAY_BOARD_TUNNEL:-OFF}" = "ON" ] || return 0
+	if [ -z "${XRAY_SERVER:-}" ]; then
+		log "WARNING: XRAY_BOARD_TUNNEL=ON but no XRAY_SERVER, the box's own traffic stays direct"
+		return 0
+	fi
+	## board_dns_add has already waited for the interface.
+	ip link show ${TUN_IFACE} > /dev/null 2>&1 || return 0
+	board_tunnel_del
+	ip route replace default dev ${TUN_IFACE} table ${BOARD_TABLE} || return 1
+	ip rule add pref 9000 iif lo lookup main suppress_prefixlength 0 || return 1
+	ip rule add pref 9010 iif lo to "${XRAY_SERVER}" lookup main || return 1
+	ip rule add pref 9020 iif lo to ${BOARD_PROBE} ipproto tcp dport 80 lookup main || return 1
+	ip rule add pref 9030 iif lo ipproto udp dport 123 lookup main || return 1
+	ip rule add pref 9035 iif lo ipproto icmp lookup main || return 1
+	ip rule add pref 9040 iif lo lookup ${BOARD_TABLE} || return 1
+	log "box traffic: default via ${TUN_IFACE} (excluded: ${XRAY_SERVER}, the direct probe, NTP, ICMP, connected subnets)"
+}
+
+## The down state: direct, unless the kill switch says there is no down state.
+dns_direct()
+{
+	if [ "${KILLSWITCH}" = "ON" ] && [ "${XRAY_CLIENT:-OFF}" = "ON" ]; then
+		dns_set ""
+		return $?
+	fi
+	dns_set "${DNS_UPSTREAM}"
+}
+
+#####################################################################
+## kill switch (XRAY_KILLSWITCH=ON): no tunnel, no forwarding
+#####################################################################
+## Default OFF, because locking the LAN out of the network on a box that is
+## reached *through* that LAN is a worse first failure than a leak. With it ON,
+## the LAN can still talk to the box and to the other LAN - only the way out is
+## closed, and only while Xray is not running.
+killswitch_add()
+{
+	[ "${KILLSWITCH}" = "ON" ] || return 0
+	## A kill switch with no Xray to wait for is just a broken LAN: nothing would
+	## ever take these rules out again.
+	[ "${XRAY_CLIENT:-OFF}" = "ON" ] || return 0
+
+	iptables -N ${KILL_CHAIN} 2>/dev/null
+	iptables -F ${KILL_CHAIN}
+	for _i in ${IFACES}; do
+		iptables -A ${KILL_CHAIN} -o "${_i}" -j RETURN
+	done
+	iptables -A ${KILL_CHAIN} -j REJECT --reject-with icmp-port-unreachable
+
+	for _i in ${IFACES}; do
+		if iptables -C FORWARD -i "${_i}" -j ${KILL_CHAIN} 2>/dev/null; then
+			continue
+		fi
+		iptables -I FORWARD -i "${_i}" -j ${KILL_CHAIN}
+	done
+	log "kill switch on: ${IFACES} cannot leave this box while Xray is down"
+}
+
+killswitch_del()
+{
+	for _i in ${IFACES}; do
+		while iptables -C FORWARD -i "${_i}" -j ${KILL_CHAIN} 2>/dev/null; do
+			iptables -D FORWARD -i "${_i}" -j ${KILL_CHAIN} || break
+		done
+	done
+	iptables -F ${KILL_CHAIN} 2>/dev/null
+	iptables -X ${KILL_CHAIN} 2>/dev/null
+}
+
+#####################################################################
+case "${1:-}" in
+add)
+	require_iproute2 || exit 1
+	build_chain || exit 1
+	route_add || exit 1
+	hook_chain || exit 1
+	## The tunnel just came up: drop the flows that were established while
+	## traffic went out directly.
+	flush_conntrack
+	## The resolvers move with the traffic, and only now that the inbound they
+	## are about to be pointed at is up.
+	dns_set "${DNS_ADDR}"
+	board_dns_add
+	board_tunnel_add
+	## Last, so there is no moment with neither the tunnel nor the kill switch.
+	killswitch_del
+	log "LAN (${IFACES}) is TPROXY'd to 127.0.0.1:${PORT} via fwmark ${MARK}/table ${TABLE}"
+	;;
+del)
+	## Fail-open: the rules go out, the LAN falls back to direct NAT via netpolicy
+	## and to a direct resolver - unless XRAY_KILLSWITCH=ON, in which case both
+	## the way out and the DNS close.
+	killswitch_add
+	dns_direct
+	board_tunnel_del
+	board_dns_del
+	unhook_chain
+	route_del
+	flush_conntrack
+	log "TPROXY policy removed"
+	;;
+boot)
+	## Called by netpolicy at boot, before anything can be forwarded: with the
+	## kill switch on, the LAN must not have a direct window between boot and
+	## Xray being up. The resolv-file is written here as well, so it exists before
+	## dnsmasq starts and reads it.
+	killswitch_add
+	dns_direct
+	;;
+*)
+	echo "usage: $(basename "$0") add|del|boot" >&2
+	exit 1
+	;;
+esac
+
+exit 0

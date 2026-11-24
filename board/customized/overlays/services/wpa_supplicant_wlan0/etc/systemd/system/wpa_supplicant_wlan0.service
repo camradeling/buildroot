@@ -1,0 +1,14 @@
+[Unit]
+Description=wpa_supplicant
+Wants=network.target
+After=sys-subsystem-net-devices-wlan0.device network.target sshd.service rc-local.service
+
+[Service]
+Type=simple
+ExecStart=/sbin/start-stop-daemon -S -m -p ${PID_FILE} -x /sbin/wpa_supplicant -- -i wlan0 -c /etc/wpa_supplicant.conf
+ExecStop=/sbin/start-stop-daemon -K -p ${PID_FILE} -x /sbin/wpa_supplicant -- signal INT
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

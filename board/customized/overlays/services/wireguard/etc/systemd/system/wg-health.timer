@@ -1,0 +1,14 @@
+[Unit]
+Description=Probe the WireGuard tunnel every minute
+Documentation=file:/usr/sbin/wg-health
+# The switch again: this is the unit preset-all enables.
+ConditionPathExists=/etc/wireguard/wg0.conf
+
+[Timer]
+# Late enough for the modem's lease and the first handshake.
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

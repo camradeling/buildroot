@@ -1,0 +1,20 @@
+[Unit]
+Description=Redial the Quectel modem's data call when it drops (AT+QNETDEVCTL)
+# Same level-triggered shape as quectel-ecm-up.service: pulled in by the wwan0
+# device unit (see [Install]), so it runs exactly while a working ECM modem is
+# present and is inert on a board without one. QUECTEL_ECM=OFF deletes this unit
+# file altogether, so it needs no Condition*= of its own.
+#
+# BindsTo: a modem reset or unplug takes wwan0 away, which stops the poller, and
+# the device coming back starts a fresh one.
+BindsTo=sys-subsystem-net-devices-wwan0.device
+After=sys-subsystem-net-devices-wwan0.device
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/modem-datacall
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wwan0.device

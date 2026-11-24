@@ -1,0 +1,19 @@
+[Unit]
+Description=USB/IP Daemon
+# Wait for network and USB subsystems
+After=network.target syslog.target 
+
+[Service]
+Type=forking
+ExecStartPre=/sbin/modprobe usbip-core
+ExecStartPre=/sbin/modprobe usbip-host
+# Main daemon
+ExecStart=/usr/sbin/usbipd -D
+# Graceful shutdown
+ExecStop=/usr/bin/pkill -TERM usbipd
+# Auto-restart with increasing delays
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

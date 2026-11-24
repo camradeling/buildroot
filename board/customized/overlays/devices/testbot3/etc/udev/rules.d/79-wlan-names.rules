@@ -1,0 +1,4 @@
+# Onboard UWE5622 WiFi (platform/unisoc_wifi) -> wlan0
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="wlan*", DRIVERS=="unisoc_wifi", NAME="wlan0"
+# AIC8800 USB WiFi -> wlan1
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="wlan*", SUBSYSTEMS=="usb", NAME="wlan1"
