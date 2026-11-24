@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-SERIAL_MUX_VERSION = b5b680764997ce9575e746649f6ab17305fd814a
+SERIAL_MUX_VERSION = bdb960d508b6006cc761bc6f890b1e3ec0cff7b6
 SERIAL_MUX_SITE = https://github.com/camradeling/serial_mux.git
 SERIAL_MUX_SITE_METHOD = git
 SERIAL_MUX_LICENSE = PROPRIETARY
